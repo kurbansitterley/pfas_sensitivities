@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pfas_sensitivities"
+version = "0.0.0"
+requires-python = ">=3.9"
+
+dependencies = [
+    "watertap==1.5.*"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
