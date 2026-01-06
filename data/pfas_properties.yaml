@@ -1,0 +1,87 @@
+PFAS: # defaults test
+  species: "PFAS"
+  mw: 0.5
+  molar_volume: 0.0003
+PFHxA:
+  species: "PFHxA"
+  mw: 0.31405
+  molar_volume: 0.0002076
+PFHpA:
+  species: "PFHpA"
+  mw: 0.36406
+  molar_volume: 0.0002361
+PFOA:
+  species: "PFOA"
+  mw: 0.41407
+  molar_volume: 0.000272
+PFNA:
+  species: "PFNA"
+  mw: 0.46408
+  molar_volume: 0.0003005
+PFDA:
+  species: "PFDA"
+  mw: 0.51408
+  molar_volume: 0.0003364
+PFBS:
+  species: "PFBS"
+  mw:  0.3001
+  molar_volume:  0.0001954
+PFHxS:
+  species: "PFHxS"
+  mw: 0.40012
+  molar_volume:  0.00027976
+PFOS:
+  species: "PFOS"
+  mw: 0.50013
+  molar_volume: 0.0003242
+HFPO-DA:
+  species: "HFPO-DA"
+  mw: 0.33005
+  molar_volume: 0.0002381
+PFBA:
+  species: "PFBA"
+  mw: 0.21404
+  molar_volume: 0.000128
+PFPeS:
+  species: "PFPeS"
+  mw: 0.350107
+  molar_volume: 0.0003 # default
+PFPeA:
+  species: "PFPeA"
+  mw: 0.26405
+  molar_volume: 0.000155
+PFPrA:
+  species: "PFPrA"
+  mw: 0.164031
+  molar_volume: 0.0003 # default
+PFHpS:
+  species: "PFHpS"
+  mw: 0.450122
+  molar_volume: 0.0003 # default
+PFPrS:
+  species: "PFPrS"
+  mw: 250.09e-3
+  molar_volume: 0.0003 # default
+PFDoDA:
+  species: "PFDoDA"
+  mw: 614.1e-3
+  molar_volume: 0.0003 # default
+PFUnDA:
+  species: "PFUnDA"
+  mw: 564.091e-3
+  molar_volume: 0.0003 # default
+
+# mw_dict = {
+
+
+#     "pfets_-": 200.9e-3,
+#     "pfprs_-": 250.09e-3,
+#     "pfdoda_-": 614.1e-3,
+#     "pfunda_-": 564.091e-3,
+#     "pfteda_-": 564.091e-3,
+#     "fosa_-": 499.14e-3,
+#     "pfpes_-": 350.107e-3,
+#     "pfhps_-": 450.122e-3,
+#     "62fs_-": 890.2e-3,
+#     "62fts_-": 890.2e-3,
+# }
