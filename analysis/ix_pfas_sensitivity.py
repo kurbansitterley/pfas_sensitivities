@@ -14,6 +14,7 @@ from idaes.core.util.model_statistics import degrees_of_freedom
 from idaes.core import FlowsheetBlock, UnitModelCostingBlock
 from idaes.core.util.model_statistics import degrees_of_freedom
 
+
 from models.ix_cphsdm import IonExchangeCPHSDM as IX
 from watertap.core.solvers import get_solver
 from watertap.costing import WaterTAPCosting
@@ -28,17 +29,14 @@ from parameter_sweep import (
     ParameterSweep,
 )
 
-
-
 __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
 absolute_path = os.path.dirname(__file__)
 par_dir = os.path.abspath(os.path.join(absolute_path, os.pardir))
 
-print(absolute_path)
-with open(f"{absolute_path}/data/pfas_properties.yaml", "r") as f:
+with open(f"{par_dir}/data/pfas_properties.yaml", "r") as f:
     species_properties = yaml.load(f, Loader=yaml.FullLoader)
 
-with open(f"{absolute_path}/data/resin_properties.yaml", "r") as f:
+with open(f"{par_dir}/data/resin_properties.yaml", "r") as f:
     resin_properties = yaml.load(f, Loader=yaml.FullLoader)
 
 
@@ -291,11 +289,10 @@ def activate_surrogate(m):
     """
 
     min_st_surrogate = PysmoSurrogate.load_from_file(
-        f"{absolute_path}/data/min_st_pysmo_surr_linear.json"
-        # f"{absolute_path}/min_st_surr_rbf_cubic-kurby.json"
+        f"{par_dir}/data/min_st_pysmo_surr_linear.json"
     )
     throughput_surrogate = PysmoSurrogate.load_from_file(
-        f"{absolute_path}/data/throughput_pysmo_surr_linear.json"
+        f"{par_dir}/data/throughput_pysmo_surr_linear.json"
     )
 
     ix = m.fs.ix
@@ -508,9 +505,9 @@ def build_outputs(m):
 
 if __name__ == "__main__":
 
-    df = pd.read_csv(f"{absolute_path}/data/ix_case_study_sensitivity_inputs.csv")
+    df = pd.read_csv(f"{par_dir}/data/ix_case_study_sensitivity_inputs.csv")
     data = df.iloc[0]
-    data
+
     m = build_and_solve(data)
     m.fs.costing.LCOW.display()
 
