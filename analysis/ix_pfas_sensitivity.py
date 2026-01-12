@@ -25,6 +25,7 @@ from watertap.property_models.multicomp_aq_sol_prop_pack import (
 from watertap.core.util.model_diagnostics.infeasible import *
 
 from parameter_sweep import (
+    parameter_sweep,
     LinearSample,
     ParameterSweep,
 )
@@ -72,6 +73,8 @@ base_ebct = 360  # seconds
 resin_dens_a694 = resin_properties["a694"]["density"]
 resin_diam_a694 = resin_properties["a694"]["diameter"]
 resin_porosity_a694 = resin_properties["a694"]["porosity"]
+
+solver = get_solver()
 
 
 def model_build(species=None):
@@ -136,6 +139,7 @@ def model_build(species=None):
     m.fs.ix.bed_expansion_frac_C.set_value(0)
 
     add_costing(m)
+    m.fs.obj = Objective(expr=m.fs.costing.LCOW, sense=minimize)
 
     m.fs.costing.ion_exchange.anion_exchange_resin_cost.set_value(346)  # EPA-WBS
 
@@ -345,7 +349,14 @@ def calc_ix_from_constr(m, calc_from_constr_dict, return_orignal_state=False):
             cvc(ixv, ixc)
 
 
-def model_solve(m, resample=True, **kwargs):
+def model_reinit(m, **kwargs):
+
+    m.fs.ix.initialize()
+
+    return m
+
+
+def model_solve(m, **kwargs):
     """
     Solve IX model with surrogates.
     """
@@ -387,12 +398,13 @@ def model_solve(m, resample=True, **kwargs):
             print(f"Failed to solve sample {m.fs.sample_number()}")
             print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n")
             print_infeasible_constraints(m)
+            print_variables_close_to_bounds(m)
             m.fs.optimal_solve.fix(0)
 
     return m, results
 
 
-def build_and_solve(data=None):
+def build_and_solve(data=None, reinit=False):
 
     m = model_build(
         species=data.target_component,
@@ -411,12 +423,16 @@ def build_and_solve(data=None):
         ds_init=5e-15,
     )
 
-    m.fs.ix.freundlich_ninv.fix(data.freundlich_ninv)
-    m.fs.ix.freundlich_k.fix(data.freundlich_k)
-    m.fs.ix.surf_diff_coeff.fix(data.surf_diff_coeff)
     m.fs.ix.resin_diam.fix(data.resin_diam)
     m.fs.ix.resin_density.fix(data.resin_density)
     m.fs.ix.resin_porosity.fix(data.resin_porosity)
+
+    m.fs.ix.freundlich_ninv.fix(data.freundlich_ninv)
+    m.fs.ix.freundlich_k.fix(data.freundlich_k)
+    m.fs.ix.surf_diff_coeff.fix(data.surf_diff_coeff)
+
+    # if reinit:
+    m.fs.ix.initialize()
 
     results = model_solve(m)
 
@@ -432,10 +448,39 @@ def solve(blk, solver=None, tee=False, check_termination=True):
     return results
 
 
-def build_sweep_params(m, num_samples=5):
+def build_sweep_params(m, num_samples=5, sweep="ebct"):
     sweep_params = {}
 
-    sweep_params["ebct"] = LinearSample(m.fs.ix.ebct, 60, 600, num_samples)
+    if sweep == "ebct":
+        # EBCT Sensitivity
+        # EPA-WBS: EBCT between 1.5-3 min per vessel, 3-6 min total
+        # Slack conversation with Alex on Jan 5, 2026 - go up to 9 min total (4.5 min per vessel)
+        sweep_params["ebct"] = LinearSample(m.fs.ix.ebct, 180, 540, num_samples)
+
+    if sweep == "loading_rate":
+        # Loading Rate Sensitivity
+        # EPA-WBS: 1-12 gpm/sqft
+
+        lr_lb, lr_ub = 0.000679, 0.00815  # gpm/ft2 to m/s
+        sweep_params["loading_rate"] = LinearSample(
+            m.fs.ix.loading_rate, lr_lb, lr_ub, num_samples)
+
+    if sweep == "ebct+loading_rate":
+        sweep_params["ebct"] = LinearSample(m.fs.ix.ebct, 180, 540, num_samples)
+        lr_lb, lr_ub = 0.000679, 0.00815  # gpm/ft2 to m/s
+
+        sweep_params["loading_rate"] = LinearSample(
+            m.fs.ix.loading_rate, lr_lb, lr_ub, num_samples
+        )
+
+    if sweep == "resin_cost":
+
+        # Resin Cost Sensitivity
+        # +/- 25% base cost of 346 USD/ft3
+
+        sweep_params["resin_cost"] = LinearSample(
+            m.fs.costing.ion_exchange.anion_exchange_resin_cost, 259.5, 432.5, num_samples
+        )
 
     return sweep_params
 
@@ -461,6 +506,7 @@ def build_outputs(m):
         "fs.ix.costing.single_use_resin_replacement_cost",
         "fs.ix.costing.total_pumping_power",
         "fs.ix.costing.fixed_operating_cost",
+        "fs.costing.ion_exchange.anion_exchange_resin_cost",
         "fs.ix.freundlich_ninv",
         "fs.ix.freundlich_k",
         "fs.ix.surf_diff_coeff",
@@ -494,13 +540,19 @@ def build_outputs(m):
         "fs.ix.film_mass_transfer_coeff",
         "fs.ix.c_norm",
         "fs.ix.c_eq",
-        "fs.random_state",
+        "fs.ix.bed_depth_to_diam_ratio",
     ]
 
     for c in cols:
         comp = m.find_component(c)
         if comp is not None:
-            outputs[c.split(".")[-1]] = comp
+            if comp.is_indexed():
+                for i, v in comp.items():
+                    outputs[c.split(".")[-1]] = v
+            else:
+                outputs[c.split(".")[-1]] = comp
+
+    return outputs
 
 
 if __name__ == "__main__":
@@ -508,58 +560,104 @@ if __name__ == "__main__":
     df = pd.read_csv(f"{par_dir}/data/ix_case_study_sensitivity_inputs.csv")
     data = df.iloc[0]
 
-    m = build_and_solve(data)
-    m.fs.costing.LCOW.display()
+    # m = build_and_solve(data)
+    # outputs = build_outputs(m)
+    # for k, v in outputs.items():
+    #     print(f"{k}: {v.name}")
 
-    # num_samples = 4
-    # num_procs = 4
-    # solver = get_solver()
-    # kwargs_dict = {
-    #     # Arguments being used in the demo
-    #     "h5_results_file_name": "ps_demo.h5",  # Resulting output file name
-    #     "build_model": build_and_solve,  # Function that builds the flowsheet model
-    #     "build_model_kwargs": dict(
-    #         read_model_defauls_from_file=False,
-    #         defaults_fname="default_configuration.yaml",
-    #     ),
-    #     "build_sweep_params": build_sweep_params,  # Function for building sweep param dictionary
-    #     "build_sweep_params_kwargs": dict(num_samples=num_samples),
-    #     "build_outputs": build_outputs,  # Function the builds outputs to save
-    #     "build_outputs_kwargs": {},
-    #     "optimize_function": solve,  # Optimize flow sheet function
-    #     "optimize_kwargs": {"solver": solver, "check_termination": False},
-    #     "initialize_function": None,
-    #     "initialize_kwargs": {},
-    #     "parallel_back_end": "MultiProcessing",  # ConcurrentFutures, MPI, Ray available
-    #     "number_of_subprocesses": num_procs,
-    #     # Additional useful keyword arguments
-    #     "csv_results_file_name": None,  # For storing results as CSV
-    #     "h5_parent_group_name": None,  # Useful for loop tool
-    #     "update_sweep_params_before_init": False,
-    #     "initialize_before_sweep": False,
-    #     "reinitialize_function": None,
-    #     "reinitialize_kwargs": {},
-    #     "reinitialize_before_sweep": False,
-    #     "probe_function": None,
-    #     # Post-processing arguments
-    #     "interpolate_nan_outputs": False,
-    #     # Advanced Users
-    #     "debugging_data_dir": None,
-    #     "log_model_states": False,
-    #     "custom_do_param_sweep": None,  # Advanced users only!
-    #     "custom_do_param_sweep_kwargs": {},
-    #     # GUI-related
-    #     "publish_progress": False,  # Compatibility with WaterTAP GUI
-    #     "publish_address": "http://localhost:8888",
-    # }
-    # ps = ParameterSweep(**kwargs_dict)
-    # results_array, results_dict = ps.parameter_sweep(
-    #     kwargs_dict["build_model"],
-    #     kwargs_dict["build_sweep_params"],
-    #     build_outputs=kwargs_dict["build_outputs"],
-    #     build_outputs_kwargs=kwargs_dict["build_outputs_kwargs"],
-    #     num_samples=num_samples,
-    #     seed=None,
-    #     build_model_kwargs=kwargs_dict["build_model_kwargs"],
-    #     build_sweep_params_kwargs=kwargs_dict["build_sweep_params_kwargs"],
-    # )
+    num_samples = 4
+    num_procs = 4
+
+    res_file = "ix_pfas_sensitivity-test.h5"
+
+    # num_samples = 100
+    # file_save = "parameter_sweep_results.csv"
+
+    results_array, results_dict = parameter_sweep(
+        build_model=build_and_solve,
+        build_model_kwargs={"data": data, "sweep": "ebct"},
+        build_sweep_params=build_sweep_params,
+        build_sweep_params_kwargs={"num_samples": num_samples},
+        build_outputs=build_outputs,
+        build_outputs_kwargs={},
+        optimize_function=solve,
+        num_samples=num_samples,
+        csv_results_file_name=res_file.replace(".h5", ".csv"),
+    )
+
+    df = pd.read_csv(res_file.replace(".h5", ".csv"))
+
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+
+    ax.plot(df["ebct"], df["LCOW"], marker="o")
+
+    plt.show()
+    # # df = pd.read_csv(file_save)
+    # # # make_stacked_plot(file_save, parameter="A_comp")
+
+    # # kwargs_dict = {
+    # #     # Arguments being used in the demo
+    # #     "h5_results_file_name": res_file,
+    # #     "build_model": build_and_solve,  # Function that builds the flowsheet model
+    # #     "build_model_kwargs": {"data": data},
+    # #     "build_sweep_params": build_sweep_params,  # Function for building sweep param dictionary
+    # #     "build_sweep_params_kwargs": dict(num_samples=num_samples),
+    # #     "build_outputs": build_outputs,  # Function the builds outputs to save
+    # #     "build_outputs_kwargs": {},
+    # #     "optimize_function": solve,
+    # #     "optimize_kwargs": {"solver": solver, "check_termination": True},
+    # #     # "initialize_function": None,
+    # #     # "initialize_kwargs": {},
+    # #     "parallel_back_end": "MultiProcessing",
+    # #     "number_of_subprocesses": num_procs,
+    # #     "csv_results_file_name": res_file.replace(".h5", ".csv"),
+    # #     "h5_parent_group_name": None,  # Useful for loop tool
+    # #     "update_sweep_params_before_init": False,
+    # #     "initialize_before_sweep": False,
+    # #     # "reinitialize_function": None,
+    # #     # "reinitialize_kwargs": {},
+    # #     # "reinitialize_before_sweep": False,
+    # #     # "probe_function": None,
+    # #     # # Post-processing arguments
+    # #     # "interpolate_nan_outputs": False,
+    # #     # # Advanced Users
+    # #     # "debugging_data_dir": None,
+    # #     # "log_model_states": False,
+    # #     # "custom_do_param_sweep": None,  # Advanced users only!
+    # #     # "custom_do_param_sweep_kwargs": {},
+    # #     # # GUI-related
+    # #     # "publish_progress": False,  # Compatibility with WaterTAP GUI
+    # #     # "publish_address": "http://localhost:8888",
+    # # }
+    # # ps = ParameterSweep(**kwargs_dict)
+    # # results_array, results_dict = ps.parameter_sweep(
+    # #     kwargs_dict["build_model"],
+    # #     kwargs_dict["build_sweep_params"],
+    # #     build_outputs=kwargs_dict["build_outputs"],
+    # #     build_outputs_kwargs=kwargs_dict["build_outputs_kwargs"],
+    # #     num_samples=num_samples,
+    # #     seed=None,
+    # #     build_model_kwargs=kwargs_dict["build_model_kwargs"],
+    # #     build_sweep_params_kwargs=kwargs_dict["build_sweep_params_kwargs"],
+    # # )
+    # # res_df = pd.read_csv(res_file.replace(".h5", ".csv"))
+    # # print(res_df)
+    # # from watertap.kurby import *
+    # # fig, ax = plot_contour(
+    # #     d,
+    # #     x="fs.ix.ebct",
+    # #     y="fs.ix.loading_rate",
+    # #     z="fs.costing.LCOW",
+    # #     x_adj=x_adj,
+    # #     y_adj=y_adj,
+    # #     set_dict=set_dict,
+    # #     cmap="winter",
+    # #     add_contour_labels=True,
+    # #     levels=5,
+    # #     contour_label_fmt="  %#.1f \$/m$^{3}$ ",
+    # #     figsize=figsize,
+    # #     cb_fontsize=fontsize - 2,
+    # #     cb_title="LCOW (\$/m$^{3}$)",
+    # # )
