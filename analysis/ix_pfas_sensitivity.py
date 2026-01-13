@@ -12,7 +12,6 @@ from idaes.core.surrogate.pysmo_surrogate import PysmoSurrogate
 from idaes.core.util.scaling import *
 from idaes.core.util.model_statistics import degrees_of_freedom
 from idaes.core import FlowsheetBlock, UnitModelCostingBlock
-from idaes.core.util.model_statistics import degrees_of_freedom
 
 
 from models.ix_cphsdm import IonExchangeCPHSDM as IX
