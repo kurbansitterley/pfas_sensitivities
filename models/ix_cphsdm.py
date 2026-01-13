@@ -42,6 +42,11 @@ class IonExchangeType(StrEnum):
 
 
 class RegenerantChem(StrEnum):
+    HCl = "HCl"
+    NaOH = "NaOH"
+    H2SO4 = "H2SO4"
+    NaCl = "NaCl"
+    MeOH = "MeOH"
     single_use = "single_use"
 
 
@@ -140,6 +145,14 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
             description="Designates if resin and residuals contain hazardous material",
         ),
     )
+    CONFIG.declare(
+        "regenerant",
+        ConfigValue(
+            default=RegenerantChem.single_use,
+            domain=In(RegenerantChem),
+            description="Chemical used for regeneration of fixed bed",
+        ),
+    )
 
     def build(self):
         super().build()
@@ -156,7 +169,7 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
             )
 
         self.ion_exchange_type = IonExchangeType.anion
-        self.config.regenerant = "single_use"
+        # self.config.regenerant = "single_use"
 
         tmp_dict = dict(**self.config.property_package_args)
         tmp_dict["has_phase_equilibrium"] = False
