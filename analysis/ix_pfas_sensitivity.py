@@ -123,11 +123,6 @@ def model_build(species=None):
     ix.t_breakthru_day = Expression(
         expr=pyunits.convert(ix.breakthrough_time, to_units=pyunits.day)
     )
-
-    m.fs.flow_mgd = Expression(
-        expr=pyunits.convert(m.fs.flow_in, to_units=pyunits.Mgallons / pyunits.day)
-    )
-
     # Purolite A694 spec sheet - pressure drop
     m.fs.ix.p_drop_A.set_value(0)
     m.fs.ix.p_drop_B.set_value(0.1338)

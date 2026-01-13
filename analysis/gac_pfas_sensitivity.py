@@ -35,10 +35,12 @@ from watertap.unit_models.gac import GAC
 from watertap.costing import WaterTAPCosting
 from watertap.costing.unit_models.gac import cost_gac, ContactorType
 from watertap.costing.multiple_choice_costing_block import MultiUnitModelCostingBlock
-from watertap.core.util.initialization import assert_degrees_of_freedom
 
-# from models.gac_cphsdm import GAC
-# from analysisWaterTAP.utils.model_state_tool import modelStateStorage
+from parameter_sweep import (
+    parameter_sweep,
+    LinearSample,
+    ParameterSweep,
+)
 
 __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
 absolute_path = os.path.dirname(__file__)
@@ -131,35 +133,38 @@ def model_build(
     m.fs.costing = WaterTAPCosting()
     m.fs.costing.base_currency = pyo.units.USD_2021
     m.fs.costing.electricity_cost.fix(0.0822)
-    m.fs.gac.costing = MultiUnitModelCostingBlock(
-        flowsheet_costing_block=m.fs.costing,
-        costing_blocks={
-            "steel_pressure": {
-                "costing_method": cost_gac,
-                "costing_method_arguments": {"contactor_type": "pressure"},
-            },
-            "concrete_gravity": {
-                "costing_method": cost_gac,
-                "costing_method_arguments": {"contactor_type": "gravity"},
-            },
-        },
-    )
+    m.fs.gac.costing = UnitModelCostingBlock(flowsheet_costing_block=m.fs.costing)
+    # m.fs.gac.costing = MultiUnitModelCostingBlock(
+    #     flowsheet_costing_block=m.fs.costing,
+    #     costing_blocks={
+    #         "steel_pressure": {
+    #             "costing_method": cost_gac,
+    #             "costing_method_arguments": {"contactor_type": "pressure"},
+    #         },
+    #         "concrete_gravity": {
+    #             "costing_method": cost_gac,
+    #             "costing_method_arguments": {"contactor_type": "gravity"},
+    #         },
+    #     },
+    # )
 
     # add flowsheet level blocks
     m.fs.costing.cost_process()
-    treated_flow = m.fs.gac.process_flow.properties_in[0].flow_vol_phase["Liq"]
+    treated_flow = m.fs.gac.process_flow.properties_out[0].flow_vol_phase["Liq"]
     m.fs.costing.add_LCOW(flow_rate=treated_flow)
 
-    custom_add_LCOW(
-        m.fs.costing,
-        m.fs.gac.costing.costing_blocks["steel_pressure"],
-        treated_flow,
-    )
-    custom_add_LCOW(
-        m.fs.costing,
-        m.fs.gac.costing.costing_blocks["concrete_gravity"],
-        treated_flow,
-    )
+    # custom_add_LCOW(
+    #     m.fs.costing,
+    #     m.fs.gac.costing.costing_blocks["steel_pressure"],
+    #     treated_flow,
+    #     name="LCOW_pressure",
+    # )
+    # custom_add_LCOW(
+    #     m.fs.costing,
+    #     m.fs.gac.costing.costing_blocks["concrete_gravity"],
+    #     treated_flow,
+    #     name="LCOW_gravity",
+    # )
 
     m.fs.obj = pyo.Objective(expr=m.fs.costing.LCOW, sense=pyo.minimize)
 
@@ -273,9 +278,9 @@ def model_init(
     # m.fs.gac.costing.costing_blocks["steel_pressure"].num_contactors_op.fix(num_op)
     # m.fs.gac.costing.costing_blocks["steel_pressure"].num_contactors_redundant.fix(math.ceil(num_op/4))
     # for gravity
-    m.fs.costing.gac_gravity.regen_frac.fix(0)
-    m.fs.costing.gac_gravity.num_contactors_op.fix(num_op)
-    m.fs.costing.gac_gravity.num_contactors_redundant.fix(num_red)
+    # m.fs.costing.gac_gravity.regen_frac.fix(0)
+    # m.fs.costing.gac_gravity.num_contactors_op.fix(num_op)
+    # m.fs.costing.gac_gravity.num_contactors_redundant.fix(num_red)
     # m.fs.gac.costing.costing_blocks["concrete_gravity"].regen_frac.fix(0)
     # m.fs.gac.costing.costing_blocks["concrete_gravity"].num_contactors_op.fix(num_op)
 
@@ -719,8 +724,17 @@ def gather_case_study_results():
     )
 
 
+def solve(blk, solver=None, tee=False, check_termination=True):
+    if solver is None:
+        solver = get_solver()
+    results = solver.solve(blk, tee=tee)
+    if check_termination:
+        pyo.assert_optimal_termination(results)
+    return results
+
+
 def build_and_solve(data):
-    
+
     m = model_build(species=data.species)
     model_init(
         m,
@@ -737,6 +751,166 @@ def build_and_solve(data):
 
     return m
 
+
+def build_sweep_params(m, num_samples=5, sweep="ebct"):
+    sweep_params = {}
+
+    if sweep == "ebct":
+        # GAC EBCT Sensitivity
+        # EPA-WBS: PFAS removal use total EBCTs between 7.6 and 26 minutes
+        ebct_lb = 7.6 * 60  # seconds
+        ebct_ub = 26 * 60  # seconds
+        sweep_params["ebct"] = LinearSample(
+            m.fs.gac.ebct, ebct_lb, ebct_ub, num_samples
+        )
+    
+    if sweep == "regen_frac":
+        # GAC Regeneration Fraction Sensitivity
+        regen_frac_lb = 0.0
+        regen_frac_ub = 0.7
+        sweep_params["regen_frac"] = LinearSample(
+            m.fs.costing.gac_pressure.regen_frac, regen_frac_lb, regen_frac_ub, num_samples
+        )
+    
+    return sweep_params
+
+
+def build_outputs(m):
+    outputs = {}
+
+    cols = [
+        "fs.gac.freund_k",
+        "fs.gac.freund_ninv",
+        "fs.gac.ds",
+        "fs.gac.kf",
+        "fs.gac.equil_conc",
+        "fs.gac.dg",
+        "fs.gac.N_Bi",
+        "fs.gac.velocity_sup",
+        "fs.gac.velocity_int",
+        "fs.gac.bed_voidage",
+        "fs.gac.bed_length",
+        "fs.gac.bed_diameter",
+        "fs.gac.bed_area",
+        "fs.gac.bed_volume",
+        "fs.gac.ebct",
+        "fs.gac.residence_time",
+        "fs.gac.bed_mass_gac",
+        "fs.gac.particle_dens_app",
+        "fs.gac.particle_dens_bulk",
+        "fs.gac.particle_dia",
+        "fs.gac.min_N_St",
+        "fs.gac.min_ebct",
+        "fs.gac.throughput",
+        "fs.gac.min_residence_time",
+        "fs.gac.min_operational_time",
+        "fs.gac.conc_ratio_replace",
+        "fs.gac.operational_time",
+        "fs.gac.bed_volumes_treated",
+        "fs.gac.ele_throughput",
+        "fs.gac.ele_min_operational_time",
+        "fs.gac.ele_conc_ratio_replace",
+        "fs.gac.ele_operational_time",
+        "fs.gac.ele_conc_ratio_term",
+        "fs.gac.conc_ratio_avg",
+        "fs.gac.mass_adsorbed",
+        "fs.gac.gac_usage_rate",
+        "fs.gac.N_Re",
+        "fs.gac.N_Sc",
+        "fs.gac.shape_correction_factor",
+        "fs.gac.process_flow.mass_transfer_term",
+        "fs.gac.costing.direct_capital_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].capital_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].contactor_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].bed_mass_gac_ref",
+        "fs.gac.costing.costing_blocks[steel_pressure].adsorbent_unit_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].adsorbent_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].other_process_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].energy_consumption",
+        "fs.gac.costing.costing_blocks[steel_pressure].cost_factor",
+        "fs.gac.costing.costing_blocks[steel_pressure].direct_capital_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].fixed_operating_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].gac_regen_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].gac_makeup_cost",
+        "fs.gac.costing.costing_blocks[steel_pressure].LCOW_pressure",
+        "fs.gac.costing.costing_blocks[concrete_gravity].capital_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].contactor_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].bed_mass_gac_ref",
+        "fs.gac.costing.costing_blocks[concrete_gravity].adsorbent_unit_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].adsorbent_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].other_process_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].energy_consumption",
+        "fs.gac.costing.costing_blocks[concrete_gravity].cost_factor",
+        "fs.gac.costing.costing_blocks[concrete_gravity].direct_capital_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].fixed_operating_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].gac_regen_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].gac_makeup_cost",
+        "fs.gac.costing.costing_blocks[concrete_gravity].LCOW_gravity",
+        "fs.costing.total_investment_factor",
+        "fs.costing.maintenance_labor_chemical_factor",
+        "fs.costing.utilization_factor",
+        "fs.costing.electricity_cost",
+        "fs.costing.electrical_carbon_intensity",
+        "fs.costing.plant_lifetime",
+        "fs.costing.wacc",
+        "fs.costing.capital_recovery_factor",
+        "fs.costing.TPEC",
+        "fs.costing.TIC",
+        "fs.costing.aggregate_capital_cost",
+        "fs.costing.aggregate_fixed_operating_cost",
+        "fs.costing.aggregate_variable_operating_cost",
+        "fs.costing.aggregate_flow_electricity",
+        "fs.costing.aggregate_flow_costs",
+        "fs.costing.aggregate_direct_capital_cost",
+        "fs.costing.total_capital_cost",
+        "fs.costing.total_operating_cost",
+        "fs.costing.maintenance_labor_chemical_operating_cost",
+        "fs.costing.total_fixed_operating_cost",
+        "fs.costing.total_variable_operating_cost",
+        "fs.costing.total_annualized_cost",
+        "fs.costing.LCOW",
+        "fs.costing.LCOW_component_direct_capex",
+        "fs.costing.LCOW_component_indirect_capex",
+        "fs.costing.LCOW_component_fixed_opex",
+        "fs.costing.LCOW_component_variable_opex",
+        "fs.costing.LCOW_aggregate_direct_capex",
+        "fs.costing.LCOW_aggregate_indirect_capex",
+        "fs.costing.LCOW_aggregate_fixed_opex",
+        "fs.costing.LCOW_aggregate_variable_opex",
+        "fs.costing.gac_pressure.num_contactors_op",
+        "fs.costing.gac_pressure.num_contactors_redundant",
+        "fs.costing.gac_pressure.regen_frac",
+        "fs.costing.gac_pressure.bed_mass_max_ref",
+        "fs.costing.gac_pressure.contactor_cost_coeff",
+        "fs.costing.gac_pressure.adsorbent_unit_cost_coeff",
+        "fs.costing.gac_pressure.other_cost_param",
+        "fs.costing.gac_pressure.regen_unit_cost",
+        "fs.costing.gac_pressure.makeup_unit_cost",
+        "fs.costing.gac_pressure.energy_consumption_coeff",
+        "fs.costing.gac_gravity.num_contactors_op",
+        "fs.costing.gac_gravity.num_contactors_redundant",
+        "fs.costing.gac_gravity.regen_frac",
+        "fs.costing.gac_gravity.bed_mass_max_ref",
+        "fs.costing.gac_gravity.contactor_cost_coeff",
+        "fs.costing.gac_gravity.adsorbent_unit_cost_coeff",
+        "fs.costing.gac_gravity.other_cost_param",
+        "fs.costing.gac_gravity.regen_unit_cost",
+        "fs.costing.gac_gravity.makeup_unit_cost",
+        "fs.costing.gac_gravity.energy_consumption_coeff",
+    ]
+
+    for c in cols:
+        comp = m.find_component(c)
+        if comp is not None:
+            if comp.is_indexed():
+                for i, cc in comp.items():
+                    outputs[c.split(".")[-1]] = cc
+            else:
+                outputs[c.split(".")[-1]] = comp
+
+    return outputs
+
+
 if __name__ == "__main__":
     # pass
     gac_inputs = pd.read_csv(
@@ -746,4 +920,5 @@ if __name__ == "__main__":
     data = gac_inputs[gac_inputs.curve_id == 0].iloc[0]
 
     m = build_and_solve(data)
-    
+
+    m.fs.costing.LCOW.display()
