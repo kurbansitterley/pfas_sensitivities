@@ -42,12 +42,8 @@ class IonExchangeType(StrEnum):
 
 
 class RegenerantChem(StrEnum):
-    HCl = "HCl"
-    NaOH = "NaOH"
-    H2SO4 = "H2SO4"
-    NaCl = "NaCl"
-    MeOH = "MeOH"
     single_use = "single_use"
+    custom = "custom"
 
 
 @declare_process_block_class("IonExchangeCPHSDM")
@@ -146,11 +142,11 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         ),
     )
     CONFIG.declare(
-        "regenerant",
+        "regen_composition",
         ConfigValue(
-            default=RegenerantChem.single_use,
-            domain=In(RegenerantChem),
-            description="Chemical used for regeneration of fixed bed",
+            default={},
+            domain=dict,
+            description="Mass fractions of regeneration solution, excluding water",
         ),
     )
 
@@ -236,7 +232,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.freundlich_k = Var(
             initialize=1,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,  # dynamic with freundlich_ninv, ((length ** 3) * (mass ** -1)) ** freundlich_ninv,
             doc="Freundlich isotherm k parameter, must be provided in base [L3/M] units",
         )
@@ -331,6 +326,27 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
             doc="Pump efficiency",
         )
 
+        self.regen_bed_volumes = Param(
+            initialize=15,
+            mutable=True,
+            units=pyunits.dimensionless,
+            doc="Number of bed volumes for regeneration step",
+        )
+
+        self.regen_soln_density = Param(
+            initialize=1000,
+            mutable=True,
+            units=pyunits.kg / pyunits.m**3,
+            doc="Density of regeneration solution",
+        )
+
+        self.regen_tank_vol_factor = Param(
+            initialize=2,
+            mutable=True,
+            units=pyunits.dimensionless,
+            doc="Regeneration tank volume fudge factor",
+        )
+
         self.regeneration_time = Param(
             initialize=1800,
             mutable=True,
@@ -405,7 +421,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.resin_diam = Var(
             initialize=7e-4,
             bounds=(5e-4, 1.5e-3),  # Perry's
-            # domain=NonNegativeReals,
             units=pyunits.m,
             doc="Resin bead diameter",
         )
@@ -413,7 +428,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.resin_density = Var(
             initialize=700,
             bounds=(500, 950),  # Perry's
-            # domain=NonNegativeReals,
             units=pyunits.kg / pyunits.m**3,
             doc="Resin bulk density",
         )
@@ -421,7 +435,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.bed_volume = Var(
             initialize=2,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.m**3,
             doc="Bed volume per column",
         )
@@ -429,7 +442,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.bed_volume_total = Var(
             initialize=2,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.m**3,
             doc="Total bed volume",
         )
@@ -437,7 +449,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.bed_depth = Var(
             initialize=1,
             bounds=(0.75, 2),  # EPA-WBS guidance
-            # domain=NonNegativeReals,
             units=pyunits.m,
             doc="Bed depth",
         )
@@ -445,7 +456,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.bed_porosity = Var(
             initialize=0.4,
             bounds=(0.3, 0.8),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Bed porosity",
         )
@@ -453,7 +463,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.column_height = Var(
             initialize=2,
             bounds=(0, 4.26),  # EPA-WBS guidance
-            # domain=NonNegativeReals,
             units=pyunits.m,
             doc="Column height",
         )
@@ -461,7 +470,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.bed_diameter = Var(
             initialize=1,
             bounds=(0.75, 4.26),  # EPA-WBS guidance
-            # domain=NonNegativeReals,
             units=pyunits.m,
             doc="Column diameter",
         )
@@ -469,7 +477,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.col_height_to_diam_ratio = Var(
             initialize=1,
             bounds=(0, 100),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Min ratio of bed depth to diameter",
         )
@@ -477,7 +484,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.number_columns = Var(
             initialize=2,
             bounds=(1, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Number of operational columns for ion exchange process",
         )
@@ -485,7 +491,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.number_columns_redundant = Var(
             initialize=1,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Number of redundant columns for ion exchange process",
         )
@@ -493,7 +498,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.breakthrough_time = Var(
             initialize=1e5,  # DOW, ~7 weeks max breakthru time
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.s,
             doc="Breakthrough time",
         )
@@ -501,7 +505,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.bv = Var(  # BV
             initialize=1e5,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Bed volumes of feed at breakthru concentration",
         )
@@ -509,7 +512,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.ebct = Var(
             initialize=520,
             bounds=(90, None),
-            # domain=NonNegativeReals,
             units=pyunits.s,
             doc="Empty bed contact time",
         )
@@ -519,7 +521,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.loading_rate = Var(
             initialize=0.0086,
             bounds=(0, 0.01),  # MWH, Perry's, EPA-WBS
-            # domain=NonNegativeReals,
             units=pyunits.m / pyunits.s,
             doc="Superficial velocity through bed",
         )
@@ -527,7 +528,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.freundlich_ninv = Var(
             initialize=0.95,
             bounds=(0, 1),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Freundlich isotherm 1/n paramter",
         )
@@ -535,7 +535,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.surf_diff_coeff = Var(
             initialize=1e-15,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.m**2 * pyunits.s**-1,
             doc="Surface diffusion coefficient",
         )
@@ -543,7 +542,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.film_mass_transfer_coeff = Var(
             initialize=1e-5,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.m * pyunits.s**-1,
             doc="Liquid phase film mass transfer coefficient",
         )
@@ -552,7 +550,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
             self.target_component_set,
             initialize=0.5,
             bounds=(0, 1),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Dimensionless (relative) bfreakthrough concentration [Ct/C0] of target ion",
         )
@@ -561,7 +558,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
             self.target_component_set,
             initialize=1e-5,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Equilibrium concentration of adsorbed phase with liquid phase",
         )
@@ -569,7 +565,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.solute_dist_param = Var(
             initialize=1e5,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Solute distribution parameter",
         )
@@ -577,7 +572,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.N_Bi = Var(
             initialize=10,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Biot number",
         )
@@ -585,7 +579,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.N_Bi_smooth = Var(
             initialize=10,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Smooth bounded Biot number",
         )
@@ -612,7 +605,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.resin_density_app = Var(
             initialize=1,
             bounds=(1, None),
-            # domain=NonNegativeReals,
             units=pyunits.kg / pyunits.m**3,
             doc="Resin apparent density",
         )
@@ -620,7 +612,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.min_N_St = Var(
             initialize=10,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Minimum Stanton number to achieve a constant pattern solution",
         )
@@ -628,7 +619,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.min_ebct = Var(
             initialize=500,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.s,
             doc="Minimum EBCT to achieve a constant pattern solution",
         )
@@ -636,7 +626,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.throughput = Var(
             initialize=1,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Specific throughput from empirical equation",
         )
@@ -644,7 +633,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.min_t_contact = Var(
             initialize=1000,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.s,
             doc="Minimum fluid residence time in the bed to achieve a constant pattern solution",
         )
@@ -652,7 +640,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.min_breakthrough_time = Var(
             initialize=1e8,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.s,
             doc="Minimum operational time of the bed from fresh to achieve a constant pattern solution",
         )
@@ -660,7 +647,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.shape_correction_factor = Var(
             initialize=1,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Shape correction factor",
         )
@@ -668,7 +654,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.resin_porosity = Var(
             initialize=1,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Resin bead porosity",
         )
@@ -676,7 +661,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.tortuosity = Var(
             initialize=1,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.dimensionless,
             doc="Tortuosity of the path that the adsorbate must take as compared to the radius",
         )
@@ -684,7 +668,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.t_contact = Var(
             initialize=100,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.s,
             doc="Contact time (residence time)",
         )
@@ -692,7 +675,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.bed_area = Var(
             initialize=100,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.m**2,
             doc="Cross-sectional bed area",
         )
@@ -700,7 +682,6 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         self.vel_inter = Var(
             initialize=1,
             bounds=(0, None),
-            # domain=NonNegativeReals,
             units=pyunits.m / pyunits.s,
             doc="Interstitial bed velocity",
         )
@@ -732,9 +713,9 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
         def cycle_time(b):
             return b.breakthrough_time + b.waste_time
 
-        # if self.config.regenerant == RegenerantChem.single_use:
-        self.regeneration_time.set_value(0)
-        self.service_to_regen_flow_ratio.set_value(0)
+        if self.config.regenerant == RegenerantChem.single_use:
+            self.regeneration_time.set_value(0)
+            self.service_to_regen_flow_ratio.set_value(0)
 
         @self.Expression(doc="Backwashing flow rate")
         def bw_flow(b):
@@ -861,10 +842,65 @@ class IonExchangeCPHSDMData(InitializationMixin, UnitModelBlockData):
                 * b.shape_correction_factor
                 * b.Sh
             ) / b.resin_diam
-        
+
         @self.Expression()
         def bed_depth_to_diam_ratio(b):
-            return pyunits.convert(b.bed_depth / b.bed_diameter, to_units=pyunits.dimensionless)
+            return pyunits.convert(
+                b.bed_depth / b.bed_diameter, to_units=pyunits.dimensionless
+            )
+
+        if self.config.regenerant != RegenerantChem.single_use:
+
+            @self.Expression(doc="Regeneration solution volumetric flow rate per cycle")
+            def regen_flow_vol(b):
+                return pyunits.convert(
+                    (b.regen_bed_volumes * b.bed_volume_total) / b.breakthrough_time,
+                    to_units=pyunits.m**3 / pyunits.s,
+                )
+
+            @self.Expression(doc="Regeneration solution mass flow rate per cycle")
+            def regen_flow_mass(b):
+                return pyunits.convert(
+                    b.regen_flow_vol * b.regen_soln_density,
+                    to_units=pyunits.kg / pyunits.s,
+                )
+
+            @self.Expression(
+                doc="Regeneration solution volumetric flow rate during regeneration step"
+            )
+            def regen_soln_flow_vol(b):
+                return pyunits.convert(
+                    prop_in.flow_vol_phase["Liq"] / b.service_to_regen_flow_ratio,
+                    to_units=pyunits.m**3 / pyunits.s,
+                )
+
+            @self.Expression(doc="Regeneration time based on flow rate and bed volumes")
+            def regen_time(b):
+                return pyunits.convert(
+                    (b.regen_bed_volumes * b.bed_volume_total) / b.regen_soln_flow_vol,
+                    to_units=pyunits.s,
+                )
+            
+            @self.Expression(doc="Regeneration tank volume required")
+            def regen_tank_vol(b):
+                return pyunits.convert(
+                    b.regen_flow_vol * b.regen_time * b.regen_tank_vol_factor,
+                    to_units=pyunits.m**3,
+                )
+            
+            @self.Expression(doc="Regen pump power")
+            def regen_pump_power(b):
+                return pyunits.convert(
+                    (
+                        b.pressure_drop
+                        * (
+                            prop_in.flow_vol_phase["Liq"]
+                            / b.service_to_regen_flow_ratio
+                        )
+                    )
+                    / b.pump_efficiency,
+                    to_units=pyunits.kilowatts,
+                ) * (b.regen_time / (b.breakthrough_time + b.backwash_time + b.rinse_time + b.regen_time))
 
         @self.Constraint()
         def eq_t_contact(b):
