@@ -43,13 +43,13 @@ def build_naoh_cost_param_block(blk):
     blk.cost = pyo.Param(
         mutable=True,
         initialize=0.59,
-        doc="NaOH cost",  # for 30% sol'n - iDST
-        units=pyo.units.USD_2020 / pyo.units.kg,
+        doc="NaOH cost",  # Caustic soda (sodium hydroxide), liq., dst contract f.o.b. Gulf - CatCost v 1.0.4
+        units=pyo.units.USD_2021 / pyo.units.kg,
     )
 
     blk.purity = pyo.Param(
         mutable=True,
-        initialize=0.30,
+        initialize=0.50,
         doc="NaOH purity",
         units=pyo.units.dimensionless,
     )
@@ -57,14 +57,32 @@ def build_naoh_cost_param_block(blk):
     costing = blk.parent_block()
     costing.register_flow_type("NaOH", blk.cost / blk.purity)
 
+def build_acetone_cost_param_block(blk):
+
+    blk.cost = pyo.Param(
+        mutable=True,
+        initialize=2.26,
+        doc="Acetone cost",  # Acetone, US Gulf, contract trucks - CatCost v 1.0.4
+        units=pyo.units.USD_2021 / pyo.units.kg,
+    )
+
+    blk.purity = pyo.Param(
+        mutable=True,
+        initialize=1,
+        doc="Acetone purity",
+        units=pyo.units.dimensionless,
+    )
+
+    costing = blk.parent_block()
+    costing.register_flow_type("acetone", blk.cost / blk.purity)
 
 def build_meoh_cost_param_block(blk):
     # MeOH = Methanol
     blk.cost = pyo.Param(
         mutable=True,
-        initialize=3.395,
-        doc="MeOH cost",  # for 100% purity - ICIS
-        units=pyo.units.USD_2008 / pyo.units.kg,
+        initialize=0.95, # Methanol, US Gulf, contract barge, CatCost v 1.0.4
+        doc="MeOH cost",  
+        units=pyo.units.USD_2021 / pyo.units.kg,
     )
 
     blk.purity = pyo.Param(
@@ -75,7 +93,7 @@ def build_meoh_cost_param_block(blk):
     )
 
     costing = blk.parent_block()
-    costing.register_flow_type("MeOH", blk.cost / blk.purity)
+    costing.register_flow_type("methanol", blk.cost / blk.purity)
 
 
 def build_nacl_cost_param_block(blk):
@@ -97,8 +115,27 @@ def build_nacl_cost_param_block(blk):
     costing = blk.parent_block()
     costing.register_flow_type("NaCl", blk.cost / blk.purity)
 
+def build_etoh_cost_param_block(blk):
+    # EtOH = Ethanol
+    blk.cost = pyo.Param(
+        mutable=True,
+        initialize=0.63, # https://www.imarcgroup.com/ethanol-pricing-report
+        doc="EtOH cost", 
+        units=pyo.units.USD_2020 / pyo.units.kg,
+    )
 
-def build_ion_exhange_cost_param_block(blk):
+    blk.purity = pyo.Param(
+        mutable=True,
+        initialize=1,
+        doc="EtOH purity",
+        units=pyo.units.dimensionless,
+    )
+
+    costing = blk.parent_block()
+    costing.register_flow_type("ethanol", blk.cost / blk.purity)
+
+
+def build_ion_exchange_cost_param_block(blk):
     blk.anion_exchange_resin_cost = pyo.Var(
         initialize=205,
         units=pyo.units.USD_2020 / pyo.units.ft**3,
@@ -189,11 +226,19 @@ def build_ion_exhange_cost_param_block(blk):
     parameter_block_name="meoh",
 )
 @register_costing_parameter_block(
+    build_rule=build_etoh_cost_param_block,
+    parameter_block_name="etoh",
+)
+@register_costing_parameter_block(
+    build_rule=build_acetone_cost_param_block,
+    parameter_block_name="acetone",
+)
+@register_costing_parameter_block(
     build_rule=build_nacl_cost_param_block,
     parameter_block_name="nacl",
 )
 @register_costing_parameter_block(
-    build_rule=build_ion_exhange_cost_param_block,
+    build_rule=build_ion_exchange_cost_param_block,
     parameter_block_name="ion_exchange",
 )
 def cost_ion_exchange(blk):
@@ -255,12 +300,12 @@ def cost_ion_exchange(blk):
         units=blk.costing_package.base_currency / blk.costing_package.base_period,
         doc="Operating cost for hazardous waste disposal",
     )
-    blk.flow_mass_regen_soln = pyo.Var(
-        initialize=1,
-        domain=pyo.NonNegativeReals,
-        units=pyo.units.kg / pyo.units.year,
-        doc="Regeneration solution flow",
-    )
+    # blk.flow_mass_regen_soln = pyo.Var(
+    #     initialize=1,
+    #     domain=pyo.NonNegativeReals,
+    #     units=pyo.units.kg / pyo.units.year,
+    #     doc="Regeneration solution flow",
+    # )
     blk.total_pumping_power = pyo.Var(
         initialize=1,
         domain=pyo.NonNegativeReals,
@@ -300,7 +345,7 @@ def cost_ion_exchange(blk):
     )
     if blk.unit_model.config.regenerant == "single_use":
         blk.capital_cost_regen_tank.fix(0)
-        blk.flow_mass_regen_soln.fix(0)
+        # blk.flow_mass_regen_soln.fix(0)
         blk.flow_vol_resin = pyo.Var(
             initialize=1e5,
             bounds=(0, None),
@@ -404,7 +449,8 @@ def cost_ion_exchange(blk):
                     )
                     * ion_exchange_params.annual_resin_replacement_factor
                     + pyo.units.convert(
-                        blk.flow_mass_regen_soln / blk.regen_soln_dens,
+                        # blk.flow_mass_regen_soln / blk.regen_soln_dens,
+                        blk.unit_model.regen_flow_vol, 
                         to_units=pyo.units.gal / pyo.units.year,
                     )
                     * ion_exchange_params.hazardous_regen_disposal
@@ -449,21 +495,17 @@ def cost_ion_exchange(blk):
             + blk.operating_cost_hazardous
         )
 
-        blk.flow_mass_regen_soln_constraint = pyo.Constraint(
-            expr=blk.flow_mass_regen_soln
-            == pyo.units.convert(
-                (
-                    (blk.regen_dose * blk.unit_model.bed_volume * tot_num_col)
-                    / (blk.unit_model.cycle_time)
-                )
-                / ion_exchange_params.regen_recycle,
-                to_units=pyo.units.kg / pyo.units.year,
-            )
-        )
-
-        blk.costing_package.cost_flow(
-            blk.flow_mass_regen_soln, blk.unit_model.config.regenerant
-        )
+        # blk.flow_mass_regen_soln_constraint = pyo.Constraint(
+        #     expr=blk.flow_mass_regen_soln
+        #     == pyo.units.convert(
+        #         (
+        #             (blk.regen_dose * blk.unit_model.bed_volume * tot_num_col)
+        #             / (blk.unit_model.cycle_time)
+        #         )
+        #         / ion_exchange_params.regen_recycle,
+        #         to_units=pyo.units.kg / pyo.units.year,
+        #     )
+        # )
 
     power_expr = (
         blk.unit_model.main_pump_power
@@ -472,6 +514,13 @@ def cost_ion_exchange(blk):
     )
     if blk.unit_model.config.regenerant != "single_use":
         power_expr += blk.unit_model.regen_pump_power
+    
+    if blk.unit_model.config.regenerant == "custom":
+        for chem, ww in blk.unit_model.config.regen_composition.items():
+            blk.costing_package.cost_flow(blk.unit_model.regen_flow_mass * ww, chem)
+    # else:
+    #     raise ValueError("Regenerant type not recognized for costing.")
+
 
     blk.total_pumping_power_constr = pyo.Constraint(
         expr=blk.total_pumping_power == power_expr
