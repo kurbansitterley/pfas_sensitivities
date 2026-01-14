@@ -76,7 +76,13 @@ resin_porosity_a694 = resin_properties["a694"]["porosity"]
 solver = get_solver()
 
 
-def model_build(species=None):
+def model_build(
+    species=None,
+    regenerant="single_use",
+    regen_composition={},
+    regen_soln_density=None,
+    **kwargs,
+):
     """
     Build ion exchange model for PFAS species and add costing.
     """
@@ -89,6 +95,8 @@ def model_build(species=None):
 
     ix_config = {
         "target_component": species,
+        "regenerant": regenerant,
+        "regen_composition": regen_composition,
     }
 
     ion_props = {
@@ -137,6 +145,9 @@ def model_build(species=None):
 
     m.fs.costing.ion_exchange.anion_exchange_resin_cost.set_value(346)  # EPA-WBS
 
+    if regen_soln_density is not None:
+        m.fs.ix.regen_soln_density.set_value(regen_soln_density)
+
     return m
 
 
@@ -153,9 +164,7 @@ def add_costing(m):
     m.fs.costing.cost_process()
     m.fs.costing.add_LCOW(flow_out)
     m.fs.costing.add_specific_energy_consumption(flow_out)
-    # m.fs.costing.cost_process()
 
-    # m.fs.costing.initialize_build
     m.fs.costing.ion_exchange.anion_exchange_resin_cost.set_value(346)  # EPA-WBS
     m.fs.costing.resin_changeout_rate = Param(
         initialize=0.01481,
@@ -398,11 +407,9 @@ def model_solve(m, **kwargs):
     return m, results
 
 
-def build_and_solve(data=None, reinit=False):
+def build_and_solve(data=None, reinit=False, sweep=None, **kwargs):
 
-    m = model_build(
-        species=data.target_component,
-    )
+    m = model_build(species=data.target_component, **kwargs)
 
     m = model_init(
         m,
@@ -429,7 +436,10 @@ def build_and_solve(data=None, reinit=False):
     m.fs.ix.initialize()
 
     results = model_solve(m)
-
+    if sweep in ["ebct", "loading_rate", "ebct+loading_rate"]:
+        m.fs.ix.number_columns.unfix()
+    if sweep in ["loading_rate", "ebct+loading_rate"]:
+        m.fs.ix.loading_rate.setub(1)
     return m
 
 
@@ -442,26 +452,51 @@ def solve(blk, solver=None, tee=False, check_termination=True):
     return results
 
 
-def build_sweep_params(m, num_samples=5, sweep="ebct"):
+def build_sweep_params(m, num_samples=5, sweep="ebct", rel_frac=0.25):
     sweep_params = {}
 
+    # EBCT Sensitivity
+    # EPA-WBS: EBCT between 1.5-3 min per vessel, 3-6 min total
+    # Slack conversation with Alex on Jan 5, 2026 - go up to 9 min total (4.5 min per vessel)
+    ebct_lb, ebct_ub = 180, 540  # seconds
+    # Loading Rate Sensitivity
+    # EPA-WBS: 1-12 gpm/sqft
+    lr_lb, lr_ub = 0.000679, 0.00815  # gpm/ft2 to m/s
+
+    # Resin Cost Sensitivity
+    # +/- X% base cost of 346 USD/ft3
+    resin_cost_base = 346
+    resin_cost_lb = resin_cost_base * (1 - rel_frac)
+    resin_cost_ub = resin_cost_base * (1 + rel_frac)
+
+    # Freundlich n Sensitivity
+    # +./- X% base value
+    freundlich_ninv_base = value(m.fs.ix.freundlich_ninv) ** -1
+    freundlich_ninv_lb = freundlich_ninv_base * (1 - rel_frac)
+    freundlich_ninv_ub = freundlich_ninv_base * (1 + rel_frac)
+
+    # Freundlich k sensitivity
+    # +./- X% base value
+    freundlich_k_base = value(m.fs.ix.freundlich_k)
+    freundlich_k_lb = freundlich_k_base * (1 - rel_frac)
+    freundlich_k_ub = freundlich_k_base * (1 + rel_frac)
+
+    # Surface Diffusivity sensitivity
+    # +./- X% base value
+    ds_base = value(m.fs.ix.surf_diff_coeff)
+    ds_lb = ds_base * (1 - rel_frac)
+    ds_ub = ds_base * (1 + rel_frac)
+
     if sweep == "ebct":
-        # EBCT Sensitivity
-        # EPA-WBS: EBCT between 1.5-3 min per vessel, 3-6 min total
-        # Slack conversation with Alex on Jan 5, 2026 - go up to 9 min total (4.5 min per vessel)
-        sweep_params["ebct"] = LinearSample(m.fs.ix.ebct, 180, 540, num_samples)
+        sweep_params["ebct"] = LinearSample(m.fs.ix.ebct, ebct_lb, ebct_ub, num_samples)
 
     if sweep == "loading_rate":
-        # Loading Rate Sensitivity
-        # EPA-WBS: 1-12 gpm/sqft
-
-        lr_lb, lr_ub = 0.000679, 0.00815  # gpm/ft2 to m/s
         sweep_params["loading_rate"] = LinearSample(
-            m.fs.ix.loading_rate, lr_lb, lr_ub, num_samples)
+            m.fs.ix.loading_rate, lr_lb, lr_ub, num_samples
+        )
 
     if sweep == "ebct+loading_rate":
-        sweep_params["ebct"] = LinearSample(m.fs.ix.ebct, 180, 540, num_samples)
-        lr_lb, lr_ub = 0.000679, 0.00815  # gpm/ft2 to m/s
+        sweep_params["ebct"] = LinearSample(m.fs.ix.ebct, ebct_lb, ebct_ub, num_samples)
 
         sweep_params["loading_rate"] = LinearSample(
             m.fs.ix.loading_rate, lr_lb, lr_ub, num_samples
@@ -469,11 +504,35 @@ def build_sweep_params(m, num_samples=5, sweep="ebct"):
 
     if sweep == "resin_cost":
 
-        # Resin Cost Sensitivity
-        # +/- 25% base cost of 346 USD/ft3
-
         sweep_params["resin_cost"] = LinearSample(
-            m.fs.costing.ion_exchange.anion_exchange_resin_cost, 259.5, 432.5, num_samples
+            m.fs.costing.ion_exchange.anion_exchange_resin_cost,
+            resin_cost_lb,
+            resin_cost_ub,
+            num_samples,
+        )
+
+    if sweep == "freundlich_ninv":
+        sweep_params["freundlich_ninv"] = LinearSample(
+            m.fs.ix.freundlich_ninv,
+            freundlich_ninv_lb,
+            freundlich_ninv_ub,
+            num_samples,
+        )
+
+    if sweep == "freundlich_k":
+        sweep_params["freundlich_k"] = LinearSample(
+            m.fs.ix.freundlich_k,
+            freundlich_k_lb,
+            freundlich_k_ub,
+            num_samples,
+        )
+
+    if sweep == "surf_diff_coeff":
+        sweep_params["surf_diff_coeff"] = LinearSample(
+            m.fs.ix.surf_diff_coeff,
+            ds_lb,
+            ds_ub,
+            num_samples,
         )
 
     return sweep_params
@@ -482,60 +541,169 @@ def build_sweep_params(m, num_samples=5, sweep="ebct"):
 def build_outputs(m):
     outputs = {}
 
-    cols = [
-        "fs.optimal_solve",
-        "fs.sample_number",
+    cols = sorted([
         "fs.costing.LCOW",
-        "fs.costing.total_capital_cost",
-        "fs.costing.total_operating_cost",
-        "fs.costing.specific_energy_consumption",
-        "fs.costing.aggregate_capital_cost",
-        "fs.costing.aggregate_fixed_operating_cost",
-        "fs.costing.aggregate_flow_electricity",
-        "fs.ix.costing.capital_cost",
-        "fs.ix.costing.capital_cost_resin",
-        "fs.ix.costing.capital_cost_vessel",
-        "fs.ix.costing.capital_cost_backwash_tank",
-        "fs.ix.costing.flow_vol_resin",
-        "fs.ix.costing.single_use_resin_replacement_cost",
-        "fs.ix.costing.total_pumping_power",
-        "fs.ix.costing.fixed_operating_cost",
-        "fs.costing.ion_exchange.anion_exchange_resin_cost",
-        "fs.ix.freundlich_ninv",
+        "fs.optimal_solve",
         "fs.ix.freundlich_k",
-        "fs.ix.surf_diff_coeff",
-        "fs.ix.bv",
-        "fs.ix.ebct",
-        "fs.ix.number_columns",
-        "fs.ix.number_columns_redundant",
-        "fs.ix.loading_rate",
-        "fs.ix.breakthrough_time",
-        "fs.ix.t_breakthru_day",
-        "fs.ix.t_breakthru_year",
-        "fs.ix.t_contact",
-        "fs.ix.N_Bi",
-        "fs.ix.N_Bi_smooth",
-        "fs.ix.Bi",
-        "fs.ix.Bi_p",
-        "fs.ix.throughput",
-        "fs.ix.resin_density",
-        "fs.ix.resin_density_app",
+        "fs.ix.underdrain_h",
+        "fs.ix.distributor_h",
+        "fs.ix.Pe_p_A",
+        "fs.ix.Pe_p_exp",
+        "fs.ix.Sh_A",
+        "fs.ix.Sh_exp_A",
+        "fs.ix.Sh_exp_B",
+        "fs.ix.Sh_exp_C",
+        "fs.ix.p_drop_A",
+        "fs.ix.p_drop_B",
+        "fs.ix.p_drop_C",
+        "fs.ix.pump_efficiency",
+        "fs.ix.regen_bed_volumes",
+        "fs.ix.regen_soln_density",
+        "fs.ix.regen_tank_vol_factor",
+        "fs.ix.regeneration_time",
+        "fs.ix.service_to_regen_flow_ratio",
+        "fs.ix.bed_expansion_frac_A",
+        "fs.ix.bed_expansion_frac_B",
+        "fs.ix.bed_expansion_frac_C",
+        "fs.ix.rinse_bed_volumes",
+        "fs.ix.backwashing_rate",
+        "fs.ix.backwash_time",
+        "fs.ix.redundant_column_freq",
         "fs.ix.resin_diam",
+        "fs.ix.resin_density",
         "fs.ix.bed_volume",
         "fs.ix.bed_volume_total",
         "fs.ix.bed_depth",
+        "fs.ix.bed_porosity",
         "fs.ix.column_height",
         "fs.ix.bed_diameter",
-        "fs.ix.min_N_St",
-        "fs.ix.min_breakthrough_time",
-        "fs.ix.min_t_contact",
-        "fs.ix.min_ebct",
-        "fs.ix.solute_dist_param",
+        "fs.ix.col_height_to_diam_ratio",
+        "fs.ix.number_columns",
+        "fs.ix.number_columns_redundant",
+        "fs.ix.breakthrough_time",
+        "fs.ix.bv",
+        "fs.ix.ebct",
+        "fs.ix.loading_rate",
+        "fs.ix.freundlich_ninv",
+        "fs.ix.surf_diff_coeff",
         "fs.ix.film_mass_transfer_coeff",
         "fs.ix.c_norm",
         "fs.ix.c_eq",
+        "fs.ix.solute_dist_param",
+        "fs.ix.N_Bi",
+        "fs.ix.N_Bi_smooth",
+        "fs.ix.N_Sc",
+        "fs.ix.N_Re",
+        "fs.ix.resin_density_app",
+        "fs.ix.min_N_St",
+        "fs.ix.min_ebct",
+        "fs.ix.throughput",
+        "fs.ix.min_t_contact",
+        "fs.ix.min_breakthrough_time",
+        "fs.ix.shape_correction_factor",
+        "fs.ix.resin_porosity",
+        "fs.ix.tortuosity",
+        "fs.ix.t_contact",
+        "fs.ix.bed_area",
+        "fs.ix.vel_inter",
+        "fs.ix.flow_per_column",
+        "fs.ix.pressure_drop",
+        "fs.ix.rinse_time",
+        "fs.ix.waste_time",
+        "fs.ix.cycle_time",
+        "fs.ix.bw_flow",
+        "fs.ix.bed_expansion_frac",
+        "fs.ix.rinse_flow",
+        "fs.ix.bw_pump_power",
+        "fs.ix.rinse_pump_power",
+        "fs.ix.bed_expansion_h",
+        "fs.ix.free_board",
+        "fs.ix.main_pump_power",
+        "fs.ix.column_volume",
+        "fs.ix.column_volume_total",
+        "fs.ix.number_columns_total",
+        "fs.ix.Sh_lam",
+        "fs.ix.Sh_turb",
+        "fs.ix.Sh_p",
+        "fs.ix.Sh",
+        "fs.ix.Bi_p",
+        "fs.ix.spdfr",
+        "fs.ix.Bi_s",
+        "fs.ix.Bi",
+        "fs.ix.kf",
         "fs.ix.bed_depth_to_diam_ratio",
-    ]
+        "fs.ix.bed_mass",
+        "fs.ix.t_breakthru_year",
+        "fs.ix.t_breakthru_day",
+        "fs.ix.costing.capital_cost",
+        "fs.ix.costing.fixed_operating_cost",
+        "fs.ix.costing.regen_soln_dens",
+        "fs.ix.costing.regen_dose",
+        "fs.ix.costing.capital_cost_vessel",
+        "fs.ix.costing.capital_cost_resin",
+        "fs.ix.costing.capital_cost_regen_tank",
+        "fs.ix.costing.capital_cost_backwash_tank",
+        "fs.ix.costing.operating_cost_hazardous",
+        "fs.ix.costing.total_pumping_power",
+        "fs.ix.costing.flow_vol_resin",
+        "fs.ix.costing.single_use_resin_replacement_cost",
+        "fs.ix.costing.backwash_tank_vol",
+        "fs.ix.costing.cost_factor",
+        "fs.ix.costing.direct_capital_cost",
+        "fs.costing.total_investment_factor",
+        "fs.costing.maintenance_labor_chemical_factor",
+        "fs.costing.utilization_factor",
+        "fs.costing.electricity_cost",
+        "fs.costing.electrical_carbon_intensity",
+        "fs.costing.plant_lifetime",
+        "fs.costing.wacc",
+        "fs.costing.capital_recovery_factor",
+        "fs.costing.TPEC",
+        "fs.costing.TIC",
+        "fs.costing.HCl_cost",
+        "fs.costing.NaOH_cost",
+        "fs.costing.methanol_cost",
+        "fs.costing.ethanol_cost",
+        "fs.costing.acetone_cost",
+        "fs.costing.NaCl_cost",
+        "fs.costing.aggregate_capital_cost",
+        "fs.costing.aggregate_fixed_operating_cost",
+        "fs.costing.aggregate_variable_operating_cost",
+        "fs.costing.aggregate_flow_electricity",
+        "fs.costing.aggregate_flow_costs",
+        "fs.costing.aggregate_direct_capital_cost",
+        "fs.costing.total_capital_cost",
+        "fs.costing.total_operating_cost",
+        "fs.costing.maintenance_labor_chemical_operating_cost",
+        "fs.costing.total_fixed_operating_cost",
+        "fs.costing.total_variable_operating_cost",
+        "fs.costing.total_annualized_cost",
+        "fs.costing.LCOW_component_direct_capex",
+        "fs.costing.LCOW_component_indirect_capex",
+        "fs.costing.LCOW_component_fixed_opex",
+        "fs.costing.LCOW_component_variable_opex",
+        "fs.costing.LCOW_aggregate_direct_capex",
+        "fs.costing.LCOW_aggregate_indirect_capex",
+        "fs.costing.LCOW_aggregate_fixed_opex",
+        "fs.costing.LCOW_aggregate_variable_opex",
+        "fs.costing.specific_energy_consumption",
+        "fs.costing.specific_energy_consumption_component",
+        "fs.costing.resin_changeout_rate",
+        "fs.costing.resin_replacement_time_required",
+        "fs.costing.ion_exchange.anion_exchange_resin_cost",
+        "fs.costing.ion_exchange.cation_exchange_resin_cost",
+        "fs.costing.ion_exchange.vessel_A_coeff",
+        "fs.costing.ion_exchange.vessel_b_coeff",
+        "fs.costing.ion_exchange.backwash_tank_A_coeff",
+        "fs.costing.ion_exchange.backwash_tank_b_coeff",
+        "fs.costing.ion_exchange.regen_tank_A_coeff",
+        "fs.costing.ion_exchange.regen_tank_b_coeff",
+        "fs.costing.ion_exchange.annual_resin_replacement_factor",
+        "fs.costing.ion_exchange.hazardous_min_cost",
+        "fs.costing.ion_exchange.hazardous_resin_disposal",
+        "fs.costing.ion_exchange.hazardous_regen_disposal",
+        "fs.costing.ion_exchange.regen_recycle",
+    ])
 
     for c in cols:
         comp = m.find_component(c)
