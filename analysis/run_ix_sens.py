@@ -40,7 +40,8 @@ from IPython.display import clear_output
 
 import analysis.ix_pfas_sensitivity as ix
 from parameter_sweep import parameter_sweep
-from watertap.kurby import *
+
+# from watertap.kurby import *
 
 with open(
     f"/Users/ksitterl/Documents/Python/pfas_sensitivities/pfas_sensitivities/data/pfas_properties.yaml",
@@ -189,7 +190,7 @@ def get_regen_soln_info(
 
 
 def run_ebct_sweep():
-        
+
     data = ix_inputs.iloc[0]
 
     num_samples = 20
@@ -272,7 +273,7 @@ def run_ebct_sweep():
                     df[f"regen_solution"] = k
                     df[f"regen_solute_{k}_conc_molar"] = v
                     df[f"regen_solution_mass_frac_{k}"] = mass_fractions[k]
-                
+
             df["regenerant"] = regenerant
             df.to_csv(save_file.replace(".h5", ".csv"), index=False)
         except:
@@ -281,7 +282,7 @@ def run_ebct_sweep():
 
 
 def run_loading_rate_sweep():
-        
+
     data = ix_inputs.iloc[0]
 
     num_samples = 20
@@ -364,9 +365,240 @@ def run_loading_rate_sweep():
                     df[f"regen_solution"] = k
                     df[f"regen_solute_{k}_conc_molar"] = v
                     df[f"regen_solution_mass_frac_{k}"] = mass_fractions[k]
-                
+
             df["regenerant"] = regenerant
             df.to_csv(save_file.replace(".h5", ".csv"), index=False)
         except:
             print(f"Curve {data.curve_id}  Failed")
             failed.append(data.curve_id)
+        break
+
+
+def run_sweeps_no_regen():
+
+    num_samples = 20
+    num_procs = 8
+    failed = list()
+    reinit_curves = [302, 305, 310]
+
+    regen_tag = "single_use"
+    regenerant = "single_use"
+    regen_soln_density = 1000
+    regen_composition = {}
+
+    for sweep in [
+        "ebct+loading_rate",
+        "ebct",
+        "loading_rate",
+        "resin_cost",
+        "freundlich_k",
+        "freundlich_ninv",
+        "surf_diff_coeff",
+    ]:
+        for i, data in ix_inputs.iterrows():
+            # if data.curve_id not in reinit_curves:
+            #     continue
+            if data.curve_id not in ix_nums:
+                continue
+
+            try:
+
+                clear_output(wait=False)
+
+                print(
+                    f"Running curve {data.curve_id} of {len(ix_inputs)}: {data.ref}, {data.target_component}, {data.resin}, {regen_tag}"
+                )
+
+                save_file = f"{path}/results/ix/ix_pfas_{sweep}_sensitivity-{data.ref}_curve{data.curve_id}_{data.target_component}_{data.resin}_{regen_tag}.h5"
+
+                if data.curve_id in reinit_curves:
+                    reinitialize_function = ix.model_reinit
+                    reinitialize_before_sweep = True
+                else:
+                    reinitialize_function = None
+                    reinitialize_before_sweep = False
+
+                results_array, results_dict = parameter_sweep(
+                    build_model=ix.build_and_solve,
+                    build_model_kwargs={
+                        "data": data,
+                        "sweep": sweep,
+                        "regen_composition": regen_composition,
+                        "regen_soln_density": regen_soln_density,
+                        "regenerant": regenerant,
+                    },
+                    build_sweep_params=ix.build_sweep_params,
+                    build_sweep_params_kwargs={
+                        "num_samples": num_samples,
+                        "sweep": sweep,
+                    },
+                    build_outputs=ix.build_outputs,
+                    build_outputs_kwargs={},
+                    h5_results_file_name=save_file,
+                    optimize_function=ix.solve,
+                    num_samples=num_samples,
+                    csv_results_file_name=save_file.replace(".h5", ".csv"),
+                    number_of_subprocesses=num_procs,
+                    reinitialize_function=reinitialize_function,
+                    reinitialize_before_sweep=reinitialize_before_sweep,
+                )
+                df = pd.read_csv(save_file.replace(".h5", ".csv"))
+
+                ##################################################################
+                # Get results for base case
+                _m = ix.build_and_solve(
+                    data,
+                    reinit=reinitialize_before_sweep,
+                    regen_composition=regen_composition,
+                    regen_soln_density=regen_soln_density,
+                    regenerant=regenerant,
+                )
+                o = ix.build_outputs(_m)
+                d = {}
+
+                for k, v in o.items():
+                    d[k] = value(v)
+                df = pd.concat([df, pd.DataFrame([d])], ignore_index=True)
+
+                df["regenerant"] = regen_tag
+                df.to_csv(save_file.replace(".h5", ".csv"), index=False)
+                ##################################################################
+
+            except:
+                print(f"Curve {data.curve_id}  Failed")
+                failed.append(data.curve_id)
+    # break
+
+
+def run_sweeps_with_regen():
+
+    num_samples = 20
+    num_procs = 8
+    failed = list()
+    reinit_curves = [302, 305, 310]
+
+    regen_tag = "ethanol_nacl"
+    regenerant = "custom"
+    solvent_vv = {"ethanol": 0.70}
+    solutes_molar = {"NaCl": 0.17}
+    regen_soln_density, regen_composition = get_regen_soln_info(
+        solvent_vv=solvent_vv,
+        solutes_molar=solutes_molar,
+    )
+
+    # regen_tag = "methanol_nacl"
+    # regenerant = "custom"
+    # solvent_vv = {"ethanol": 0.70}
+    # solutes_molar = {"NaCl": 0.17}
+    # regen_soln_density, regen_composition = get_regen_soln_info(
+    #     solvent_vv=solvent_vv,
+    #     solutes_molar=solutes_molar,
+    # )
+
+    # regen_tag = "acetone_nacl"
+    # regenerant = "custom"
+    # solvent_vv = {"acetone": 0.70}
+    # solutes_molar = {"NaCl": 0.17}
+    # regen_soln_density, regen_composition = get_regen_soln_info(
+    #     solvent_vv=solvent_vv,
+    #     solutes_molar=solutes_molar,
+    # )
+
+    for sweep in [
+        "ebct+loading_rate",
+        "ebct",
+        "loading_rate",
+        "resin_cost",
+        "freundlich_k",
+        "freundlich_ninv",
+        "surf_diff_coeff",
+        "annual_resin_replacement_factor",
+        "annual_resin_replacement_factor+resin_cost",
+    ]:
+        for i, data in ix_inputs.iterrows():
+            # if data.curve_id not in reinit_curves:
+            #     continue
+            if data.curve_id not in ix_nums:
+                continue
+
+            try:
+
+                clear_output(wait=False)
+
+                print(
+                    f"Running curve {data.curve_id} of {len(ix_inputs)}: {data.ref}, {data.target_component}, {data.resin}, {regen_tag}"
+                )
+
+                save_file = f"{path}/results/ix/ix_pfas_{sweep}_sensitivity-{data.ref}_curve{data.curve_id}_{data.target_component}_{data.resin}_{regen_tag}.h5"
+
+                if data.curve_id in reinit_curves:
+                    reinitialize_function = ix.model_reinit
+                    reinitialize_before_sweep = True
+                else:
+                    reinitialize_function = None
+                    reinitialize_before_sweep = False
+
+                results_array, results_dict = parameter_sweep(
+                    build_model=ix.build_and_solve,
+                    build_model_kwargs={
+                        "data": data,
+                        "sweep": sweep,
+                        "regen_composition": regen_composition,
+                        "regen_soln_density": regen_soln_density,
+                        "regenerant": regenerant,
+                    },
+                    build_sweep_params=ix.build_sweep_params,
+                    build_sweep_params_kwargs={
+                        "num_samples": num_samples,
+                        "sweep": sweep,
+                    },
+                    build_outputs=ix.build_outputs,
+                    build_outputs_kwargs={},
+                    h5_results_file_name=save_file,
+                    optimize_function=ix.solve,
+                    num_samples=num_samples,
+                    csv_results_file_name=save_file.replace(".h5", ".csv"),
+                    number_of_subprocesses=num_procs,
+                    reinitialize_function=reinitialize_function,
+                    reinitialize_before_sweep=reinitialize_before_sweep,
+                )
+                df = pd.read_csv(save_file.replace(".h5", ".csv"))
+
+                ##################################################################
+                # Get results for base case
+                _m = ix.build_and_solve(
+                    data,
+                    reinit=reinitialize_before_sweep,
+                    regen_composition=regen_composition,
+                    regen_soln_density=regen_soln_density,
+                    regenerant=regenerant,
+                )
+                o = ix.build_outputs(_m)
+                d = {}
+
+                for k, v in o.items():
+                    d[k] = value(v)
+
+                df = pd.concat([df, pd.DataFrame([d])], ignore_index=True)
+
+                for k, v in solvent_vv.items():
+                    df[f"regen_solvent"] = k
+                    df[f"regen_solvent_{k}_vol_frac"] = v
+                    df[f"regen_solution_mass_frac_{k}"] = regen_composition[k]
+                for k, v in solutes_molar.items():
+                    df[f"regen_solution"] = k
+                    df[f"regen_solute_{k}_conc_molar"] = v
+                    df[f"regen_solution_mass_frac_{k}"] = regen_composition[k]
+
+                df["regenerant"] = regen_tag
+                df.to_csv(save_file.replace(".h5", ".csv"), index=False)
+                ##################################################################
+
+            except:
+                print(f"Curve {data.curve_id}  Failed")
+                failed.append(data.curve_id)
+
+
+# if __name__ == "__main__":
+# run_ebct_sweep()
+# run_loading_rate_sweep()
