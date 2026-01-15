@@ -10,7 +10,22 @@ from collections import defaultdict
 import numpy as np
 import matplotlib.pyplot as plt
 
-import pyomo.environ as pyo
+# import pyomo.environ as pyo
+from pyomo.environ import (
+    ConcreteModel,
+    Var,
+    Param,
+    Expression,
+    Constraint,
+    Objective,
+    SolverFactory,
+    TransformationFactory,
+    minimize,
+    Reals,
+    value,
+    assert_optimal_termination,
+    units as pyunits,
+)
 from pyomo.network import Arc
 from pyomo.util.calc_var_value import calculate_variable_from_constraint
 from pyomo.util.check_units import assert_units_consistent
@@ -31,7 +46,9 @@ from watertap.property_models.multicomp_aq_sol_prop_pack import (
     DiffusivityCalculation,
 )
 from watertap.core.util.model_diagnostics.infeasible import *
-from watertap.unit_models.gac import GAC
+
+# from watertap.unit_models.gac import GAC
+from models.gac_cphsdm import GAC
 from watertap.costing import WaterTAPCosting
 from watertap.costing.unit_models.gac import cost_gac, ContactorType
 from watertap.costing.multiple_choice_costing_block import MultiUnitModelCostingBlock
@@ -87,14 +104,18 @@ epa_limits = {
     "11Cl-PF3OUdS": assumed_lim,
 }
 
-mw_water = 0.018 * pyo.units.kg / pyo.units.mol
-rho = 1000 * pyo.units.kg / pyo.units.m**3
+mw_water = 0.018 * pyunits.kg / pyunits.mol
+rho = 1000 * pyunits.kg / pyunits.m**3
 
 solver = get_solver()
 
 
 def model_build(
     species="PFAS",
+    # regenerant="single_use",
+    # regen_composition={},
+    # regen_soln_density=None,
+    gac_config=dict(),
     **kwargs,
 ):
 
@@ -104,7 +125,7 @@ def model_build(
     pfas_mv = species_properties[species]["molar_volume"]
 
     # create m objects
-    m = pyo.ConcreteModel()
+    m = ConcreteModel()
     m.fs = FlowsheetBlock(dynamic=False)
     m.fs.properties = MCASParameterBlock(
         solute_list=[species],
@@ -116,23 +137,24 @@ def model_build(
     m.fs.feed.properties[0].conc_mass_phase_comp
     m.fs.feed.properties[0].flow_vol_phase
 
-    m.fs.gac = GAC(
-        property_package=m.fs.properties,
-        film_transfer_coefficient_type="calculated",
-        surface_diffusion_coefficient_type="fixed",
-    )
+    # gac_config["property_package"] = m.fs.properties
+    gac_config["film_transfer_coefficient_type"] = "calculated"
+    gac_config["surface_diffusion_coefficient_type"] = "fixed"
+
+    m.fs.gac = GAC(property_package=m.fs.properties, **gac_config)
 
     # streams
     m.fs.s01 = Arc(source=m.fs.feed.outlet, destination=m.fs.gac.inlet)
-    pyo.TransformationFactory("network.expand_arcs").apply_to(m)
+    TransformationFactory("network.expand_arcs").apply_to(m)
 
     # model customization
     deactivate_ss_calculations(m)
 
     # build costing blocks
     m.fs.costing = WaterTAPCosting()
-    m.fs.costing.base_currency = pyo.units.USD_2021
-    m.fs.costing.electricity_cost.fix(0.0822)
+    m.fs.costing.base_currency = pyunits.USD_2021
+    # m.fs.costing.electricity_cost.fix(0.0822)
+    m.fs.costing.utilization_factor.fix(1)
     m.fs.gac.costing = UnitModelCostingBlock(flowsheet_costing_block=m.fs.costing)
     # m.fs.gac.costing = MultiUnitModelCostingBlock(
     #     flowsheet_costing_block=m.fs.costing,
@@ -166,7 +188,9 @@ def model_build(
     #     name="LCOW_gravity",
     # )
 
-    m.fs.obj = pyo.Objective(expr=m.fs.costing.LCOW, sense=pyo.minimize)
+    m.fs.obj = Objective(expr=m.fs.costing.LCOW, sense=minimize)
+    # if regen_soln_density is not None:
+    #     m.fs.gac.regen_soln_density.set_value(regen_soln_density)
 
     return m
 
@@ -185,18 +209,16 @@ def model_init(
     # touch properties and default scaling
     species = m.fs.properties.solute_set.at(1)
 
-    mw = species_properties[species]["mw"] * pyo.units.kg / pyo.units.mol
-    c0 = inlet_conc * pyo.units.kg / pyo.units.m**3
-    q_in = flow_rate * pyo.units.m**3 / pyo.units.s
+    mw = species_properties[species]["mw"] * pyunits.kg / pyunits.mol
+    c0 = inlet_conc * pyunits.kg / pyunits.m**3
+    q_in = flow_rate * pyunits.m**3 / pyunits.s
 
-    c0_mol_flow = pyo.units.convert(
-        (c0 * q_in) / mw, to_units=pyo.units.mol / pyo.units.s
-    )
+    c0_mol_flow = pyunits.convert((c0 * q_in) / mw, to_units=pyunits.mol / pyunits.s)
     c0_mol_flow_sf = 1 / value(c0_mol_flow)
 
-    water_mol_flow = pyo.units.convert(
+    water_mol_flow = pyunits.convert(
         (q_in * rho) / mw_water,
-        to_units=pyo.units.mol / pyo.units.s,
+        to_units=pyunits.mol / pyunits.s,
     )
     water_mol_flow_sf = 1 / value(water_mol_flow)
     m.fs.properties.set_default_scaling(
@@ -234,7 +256,7 @@ def model_init(
     # gac particle specifications
     m.fs.gac.particle_dens_app.fix(particle_density)
     # m.fs.gac.particle_dia.fix(particle_size)
-    m.fs.gac.particle_dia.fix(1 * pyo.units.mm)
+    m.fs.gac.particle_dia.fix(1 * pyunits.mm)
     # adsorber bed specifications
     m.fs.gac.ebct.fix(900)  # 15 min
     m.fs.gac.bed_voidage.fix(0.40)
@@ -257,8 +279,8 @@ def model_init(
     m.fs.gac.b4.fix(0.0157697)
     m.fs.gac.shape_correction_factor.fix()
 
-    for v in m.fs.gac.component_objects(pyo.Var, descend_into=True):
-        v.domain = pyo.Reals
+    for v in m.fs.gac.component_objects(Var, descend_into=True):
+        v.domain = Reals
         v.setlb(None)
         v.setub(None)
 
@@ -271,7 +293,7 @@ def model_init(
     else:
         num_red = 2
     # for pressure
-    m.fs.costing.gac_pressure.regen_frac.fix(0)
+    m.fs.costing.gac_pressure.regen_frac.fix(0.5)
     m.fs.costing.gac_pressure.num_contactors_op.fix(num_op)
     m.fs.costing.gac_pressure.num_contactors_redundant.fix(math.ceil(num_op / 4))
     # m.fs.gac.costing.costing_blocks["steel_pressure"].regen_frac.fix(0)
@@ -285,7 +307,7 @@ def model_init(
     # m.fs.gac.costing.costing_blocks["concrete_gravity"].num_contactors_op.fix(num_op)
 
     results = solver.solve(m)
-    pyo.assert_optimal_termination(results)
+    assert_optimal_termination(results)
 
     # presolve_init(m)
     activate_surrogate(m)
@@ -293,6 +315,8 @@ def model_init(
     # calculate_variable_from_constraint(m.fs.gac.throughput, m.fs.throughput_surrogate.pysmo_constraint["throughput"])
 
     m.fs.gac.initialize()
+
+    m.fs.optimal_solve = Var(initialize=0)
 
     return m
 
@@ -365,32 +389,35 @@ def model_solve(m, tee=False):
 
     try:
         res = solver.solve(m, tee=tee)
-        pyo.assert_optimal_termination(res)
+        assert_optimal_termination(res)
+        m.fs.optimal_solve.fix(1)
         print("solver termination condition:", res.solver.termination_condition)
     except:
         try:
             # try sequential solution if equation oriented fails
             feasible_breakthrough = sequential_solve(m, eps=eps, iterlim=iterlim)
             if not feasible_breakthrough:
-                m.fs.gac.costing.costing_blocks["steel_pressure"].LCOW = 100
-                m.fs.gac.costing.costing_blocks["concrete_gravity"].LCOW = 100
+                # m.fs.gac.costing.costing_blocks["steel_pressure"].LCOW = 100
+                # m.fs.gac.costing.costing_blocks["concrete_gravity"].LCOW = 100
                 res = dummy_pyomo_solve(solver=solver)
                 print("solver termination condition:", "skipped")
                 pass
             else:
                 res = solver.solve(m, tee=tee)
-                pyo.assert_optimal_termination(res)
+                assert_optimal_termination(res)
+                m.fs.optimal_solve.fix(1)
                 print("solver termination condition:", res.solver.termination_condition)
         except:
             sequential_solve(m, eps=eps, iterlim=iterlim)
             for x in istat.activated_constraints_set(m):
-                residual = abs(pyo.value(x.body) - pyo.value(x.lb))
+                residual = abs(value(x.body) - value(x.lb))
                 if residual > 1e-8:
                     print(f"{x}\t{residual}")
                     print("solver termination condition:", "failed")
                     assert False
             res = dummy_pyomo_solve(solver=solver)
             print("solver termination condition:", "sequential solution")
+            m.fs.optimal_solve.fix(0)
 
     return res
 
@@ -458,70 +485,71 @@ def sequential_solve(m, eps=1e-12, iterlim=1000):
             eps=eps,
             iterlim=iterlim,
         )
-        for costing_block in (
-            m.fs.gac.costing.costing_blocks["steel_pressure"],
-            m.fs.gac.costing.costing_blocks["concrete_gravity"],
-        ):
-            calculate_variable_from_constraint(
-                costing_block.contactor_cost,
-                costing_block.contactor_cost_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.bed_mass_gac_ref,
-                costing_block.bed_mass_gac_ref_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.adsorbent_unit_cost,
-                costing_block.adsorbent_unit_cost_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.adsorbent_cost,
-                costing_block.adsorbent_cost_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.other_process_cost,
-                costing_block.other_process_cost_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.capital_cost,
-                costing_block.capital_cost_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.gac_regen_cost,
-                costing_block.gac_regen_cost_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.gac_makeup_cost,
-                costing_block.gac_makeup_cost_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.fixed_operating_cost,
-                costing_block.fixed_operating_cost_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
-            calculate_variable_from_constraint(
-                costing_block.energy_consumption,
-                costing_block.energy_consumption_constraint,
-                eps=eps,
-                iterlim=iterlim,
-            )
+        if hasattr(m.fs.gac.costing, "costing_blocks"):
+            for costing_block in (
+                m.fs.gac.costing.costing_blocks["steel_pressure"],
+                m.fs.gac.costing.costing_blocks["concrete_gravity"],
+            ):
+                calculate_variable_from_constraint(
+                    costing_block.contactor_cost,
+                    costing_block.contactor_cost_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.bed_mass_gac_ref,
+                    costing_block.bed_mass_gac_ref_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.adsorbent_unit_cost,
+                    costing_block.adsorbent_unit_cost_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.adsorbent_cost,
+                    costing_block.adsorbent_cost_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.other_process_cost,
+                    costing_block.other_process_cost_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.capital_cost,
+                    costing_block.capital_cost_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.gac_regen_cost,
+                    costing_block.gac_regen_cost_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.gac_makeup_cost,
+                    costing_block.gac_makeup_cost_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.fixed_operating_cost,
+                    costing_block.fixed_operating_cost_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
+                calculate_variable_from_constraint(
+                    costing_block.energy_consumption,
+                    costing_block.energy_consumption_constraint,
+                    eps=eps,
+                    iterlim=iterlim,
+                )
             # calculate_variable_from_constraint(costing_block.LCOW, costing_block.LCOW_constraint, eps=eps, iterlim=iterlim)
         calculate_variable_from_constraint(
             m.fs.costing.aggregate_capital_cost,
@@ -567,37 +595,35 @@ def sequential_solve(m, eps=1e-12, iterlim=1000):
 
 def custom_add_LCOW(fs_costing, unit_costing, flow_rate, name="LCOW"):
 
-    LCOW = pyo.Var(
+    LCOW = Var(
         initialize=0.5,
         doc=f"Levelized Cost of Water based on flow {flow_rate.name}",
-        units=fs_costing.base_currency / pyo.units.m**3,
+        units=fs_costing.base_currency / pyunits.m**3,
     )
     unit_costing.add_component(name, LCOW)
 
-    electricity_flow_cost = pyo.units.convert(
+    electricity_flow_cost = pyunits.convert(
         unit_costing.energy_consumption * fs_costing.electricity_cost,
         to_units=fs_costing.base_currency / fs_costing.base_period,
     )
-    total_capital_cost = pyo.units.convert(
+    total_capital_cost = pyunits.convert(
         fs_costing.total_investment_factor * unit_costing.capital_cost,
         to_units=fs_costing.base_currency,
     )
-    total_operating_cost = pyo.units.convert(
+    total_operating_cost = pyunits.convert(
         (fs_costing.maintenance_labor_chemical_factor * total_capital_cost)
         + unit_costing.fixed_operating_cost
         + electricity_flow_cost * fs_costing.utilization_factor,
         to_units=fs_costing.base_currency / fs_costing.base_period,
     )
-    LCOW_constraint = pyo.Constraint(
+    LCOW_constraint = Constraint(
         expr=LCOW
         == (
             total_capital_cost * fs_costing.capital_recovery_factor
             + total_operating_cost
         )
         / (
-            pyo.units.convert(
-                flow_rate, to_units=pyo.units.m**3 / fs_costing.base_period
-            )
+            pyunits.convert(flow_rate, to_units=pyunits.m**3 / fs_costing.base_period)
             * fs_costing.utilization_factor
         ),
         doc=f"Constraint for Levelized Cost of Water based on flow {flow_rate.name}",
@@ -607,9 +633,9 @@ def custom_add_LCOW(fs_costing, unit_costing, flow_rate, name="LCOW"):
 
 def dummy_pyomo_solve(solver=None):
 
-    dummy_model = pyo.ConcreteModel()
-    dummy_model.x = pyo.Var(initialize=1)
-    dummy_model.eq = pyo.Constraint(expr=dummy_model.x == 1)
+    dummy_model = ConcreteModel()
+    dummy_model.x = Var(initialize=1)
+    dummy_model.eq = Constraint(expr=dummy_model.x == 1)
     res = solver.solve(dummy_model, tee=False)
 
     return res
@@ -660,6 +686,7 @@ def gather_case_study_results():
                 lambda x: x.decode("utf-8") if isinstance(x, (bytes, bytearray)) else x
             )
             if species in ix_input["target_component"].values:
+                # Get C0 and Cb from IX input file
                 ix_input_row = ix_input[ix_input["target_component"] == species].iloc[0]
                 c0 = ix_input_row["c0"]
                 cb = ix_input_row["cb"]
@@ -729,13 +756,13 @@ def solve(blk, solver=None, tee=False, check_termination=True):
         solver = get_solver()
     results = solver.solve(blk, tee=tee)
     if check_termination:
-        pyo.assert_optimal_termination(results)
+        assert_optimal_termination(results)
     return results
 
 
-def build_and_solve(data):
+def build_and_solve(data, sweep=None, gac_config={}, **kwargs):
 
-    m = model_build(species=data.species)
+    m = model_build(species=data.species, gac_config=gac_config, **kwargs)
     model_init(
         m,
         solver=solver,
@@ -749,29 +776,96 @@ def build_and_solve(data):
     m.fs.gac.ds.fix(data.ds)
     res = model_solve(m, tee=False)
 
+    if sweep == "adsorbent_unit_cost":
+        m.fs.gac.costing.adsorbent_cost_constraint.deactivate()
+
     return m
 
 
-def build_sweep_params(m, num_samples=5, sweep="ebct"):
+def build_sweep_params(m, num_samples=5, sweep="ebct", rel_frac=0.25):
     sweep_params = {}
 
+    # EPA-WBS GAC documentation:
+    # https://www.epa.gov/system/files/documents/2022-03/gac-documentation-.pdf_0.pdf
+
+    # GAC EBCT Sensitivity
+    # EPA-WBS: PFAS removal use total EBCTs between 7.6 and 26 minutes
+    ebct_lb = 7.6 * 60  # seconds
+    ebct_ub = 26 * 60  # seconds
+
+    # GAC Loading Rate Sensitivity
+    # EPA-WBS: Loading rate between 0.5 and 10 gpm/ft2
+    loading_rate_lb = value(
+        pyunits.convert(
+            0.5 * pyunits.gallon / (pyunits.minute * pyunits.ft**2),
+            to_units=pyunits.m / pyunits.s,
+        )
+    )  # gpm/ft2
+    loading_rate_ub = value(
+        pyunits.convert(
+            10 * pyunits.gallon / (pyunits.minute * pyunits.ft**2),
+            to_units=pyunits.m / pyunits.s,
+        )
+    )  # gpm/ft2
+
+    # GAC Regeneration Fraction Sensitivity
+    regen_frac_lb = 0.1
+    regen_frac_ub = 0.9
+
+    # GAC Adsorbent Unit Cost Sensitivity
+    adsorbent_cost_base = value(m.fs.costing.gac_pressure.makeup_unit_cost)
+    adsorbent_unit_cost_lb = adsorbent_cost_base * (1 - rel_frac)
+    adsorbent_unit_cost_ub = adsorbent_cost_base * (1 + rel_frac)
+
+    # GAC Regen Unit Cost Sensitivity
+    # EPA-WBS: Off-site thermal regeneration cost between 1.21-2.03 $/lb GAC
+    # adsorbent_cost_base = value(m.fs.costing.gac_pressure.makeup_unit_cost)
+    # adsorbent_unit_cost_lb = adsorbent_cost_base * (1 - rel_frac)
+    # adsorbent_unit_cost_ub = adsorbent_cost_base * (1 + rel_frac)
+
     if sweep == "ebct":
-        # GAC EBCT Sensitivity
-        # EPA-WBS: PFAS removal use total EBCTs between 7.6 and 26 minutes
-        ebct_lb = 7.6 * 60  # seconds
-        ebct_ub = 26 * 60  # seconds
         sweep_params["ebct"] = LinearSample(
             m.fs.gac.ebct, ebct_lb, ebct_ub, num_samples
         )
-    
-    if sweep == "regen_frac":
-        # GAC Regeneration Fraction Sensitivity
-        regen_frac_lb = 0.0
-        regen_frac_ub = 0.7
-        sweep_params["regen_frac"] = LinearSample(
-            m.fs.costing.gac_pressure.regen_frac, regen_frac_lb, regen_frac_ub, num_samples
+
+    if sweep == "loading_rate":
+        sweep_params["loading_rate"] = LinearSample(
+            m.fs.gac.velocity_sup,
+            loading_rate_lb,
+            loading_rate_ub,
+            num_samples,
         )
-    
+
+    if sweep == "regen_frac":
+        sweep_params["regen_frac"] = LinearSample(
+            m.fs.costing.gac_pressure.regen_frac,
+            regen_frac_lb,
+            regen_frac_ub,
+            num_samples,
+        )
+
+    if sweep == "makeup_unit_cost":
+        sweep_params["makeup_unit_cost"] = LinearSample(
+            m.fs.costing.gac_pressure.makeup_unit_cost,
+            adsorbent_unit_cost_lb,
+            adsorbent_unit_cost_ub,
+            num_samples,
+        )
+
+    if sweep == "regen_frac+makeup_unit_cost":
+        sweep_params["regen_frac"] = LinearSample(
+            m.fs.costing.gac_pressure.regen_frac,
+            regen_frac_lb,
+            regen_frac_ub,
+            num_samples,
+        )
+
+        sweep_params["makeup_unit_cost"] = LinearSample(
+            m.fs.costing.gac_pressure.makeup_unit_cost,
+            adsorbent_unit_cost_lb,
+            adsorbent_unit_cost_ub,
+            num_samples,
+        )
     return sweep_params
 
 
@@ -779,21 +873,25 @@ def build_outputs(m):
     outputs = {}
 
     cols = [
+        "fs.optimal_solve",
+        "fs.costing.LCOW",
+        "fs.gac.costing.costing_blocks[steel_pressure].LCOW_pressure",
+        "fs.gac.costing.costing_blocks[concrete_gravity].LCOW_gravity",
         "fs.gac.freund_k",
         "fs.gac.freund_ninv",
         "fs.gac.ds",
+        "fs.gac.ebct",
+        "fs.gac.velocity_sup",
         "fs.gac.kf",
         "fs.gac.equil_conc",
         "fs.gac.dg",
         "fs.gac.N_Bi",
-        "fs.gac.velocity_sup",
         "fs.gac.velocity_int",
         "fs.gac.bed_voidage",
         "fs.gac.bed_length",
         "fs.gac.bed_diameter",
         "fs.gac.bed_area",
         "fs.gac.bed_volume",
-        "fs.gac.ebct",
         "fs.gac.residence_time",
         "fs.gac.bed_mass_gac",
         "fs.gac.particle_dens_app",
@@ -815,6 +913,16 @@ def build_outputs(m):
         "fs.gac.conc_ratio_avg",
         "fs.gac.mass_adsorbed",
         "fs.gac.gac_usage_rate",
+        "fs.gac.regen_bed_volumes",
+        "fs.gac.regen_soln_density",
+        "fs.gac.regen_tank_vol_factor",
+        "fs.gac.regeneration_time",
+        "fs.gac.service_to_regen_flow_ratio",
+        "fs.gac.regen_flow_vol",
+        "fs.gac.regen_flow_mass",
+        "fs.gac.regen_soln_flow_vol",
+        "fs.gac.regen_time",
+        "fs.gac.regen_tank_vol",
         "fs.gac.N_Re",
         "fs.gac.N_Sc",
         "fs.gac.shape_correction_factor",
@@ -832,7 +940,6 @@ def build_outputs(m):
         "fs.gac.costing.costing_blocks[steel_pressure].fixed_operating_cost",
         "fs.gac.costing.costing_blocks[steel_pressure].gac_regen_cost",
         "fs.gac.costing.costing_blocks[steel_pressure].gac_makeup_cost",
-        "fs.gac.costing.costing_blocks[steel_pressure].LCOW_pressure",
         "fs.gac.costing.costing_blocks[concrete_gravity].capital_cost",
         "fs.gac.costing.costing_blocks[concrete_gravity].contactor_cost",
         "fs.gac.costing.costing_blocks[concrete_gravity].bed_mass_gac_ref",
@@ -845,7 +952,6 @@ def build_outputs(m):
         "fs.gac.costing.costing_blocks[concrete_gravity].fixed_operating_cost",
         "fs.gac.costing.costing_blocks[concrete_gravity].gac_regen_cost",
         "fs.gac.costing.costing_blocks[concrete_gravity].gac_makeup_cost",
-        "fs.gac.costing.costing_blocks[concrete_gravity].LCOW_gravity",
         "fs.costing.total_investment_factor",
         "fs.costing.maintenance_labor_chemical_factor",
         "fs.costing.utilization_factor",
@@ -868,7 +974,6 @@ def build_outputs(m):
         "fs.costing.total_fixed_operating_cost",
         "fs.costing.total_variable_operating_cost",
         "fs.costing.total_annualized_cost",
-        "fs.costing.LCOW",
         "fs.costing.LCOW_component_direct_capex",
         "fs.costing.LCOW_component_indirect_capex",
         "fs.costing.LCOW_component_fixed_opex",
@@ -897,6 +1002,14 @@ def build_outputs(m):
         "fs.costing.gac_gravity.regen_unit_cost",
         "fs.costing.gac_gravity.makeup_unit_cost",
         "fs.costing.gac_gravity.energy_consumption_coeff",
+        "fs.gac.costing.onsite_thermal_regen_energy_consumption",
+        "fs.gac.costing.onsite_thermal_regen_capital_cost",
+        "fs.costing.aggregate_flow_costs[electricity]",
+        "fs.costing.aggregate_flow_costs[ethanol]",
+        "fs.costing.aggregate_flow_costs[methanol]",
+        "fs.costing.aggregate_flow_costs[acetone]",
+        "fs.costing.aggregate_flow_costs[NaCl]",
+        "fs.costing.aggregate_flow_costs[NaOH]",
     ]
 
     for c in cols:
@@ -912,13 +1025,115 @@ def build_outputs(m):
 
 
 if __name__ == "__main__":
-    # pass
-    gac_inputs = pd.read_csv(
-        "/Users/ksitterl/Documents/Python/pfas_sensitivities/pfas_sensitivities/data/gac_case_study_sensitivity_inputs.csv"
+
+    # gather_case_study_results()
+
+    inputs_file = "/Users/ksitterl/Documents/Python/pfas_sensitivities/pfas_sensitivities/data/gac_case_study_sensitivity_inputs.csv"
+    gac_inputs = pd.read_csv(inputs_file)
+    path = "/Users/ksitterl/Documents/Python/pfas_sensitivities/pfas_sensitivities"
+    num_samples = 20
+    num_procs = 6
+    sweep = "loading_rate"
+    # sweep = "adsorbent_unit_cost"
+    cs_nums = [14, 21, 0]
+    # cs_nums = [0]
+
+    # ebct_lb = 7.6 * 60  # seconds
+    # ebct_ub = 26 * 60  # seconds
+    # ebcts = np.linspace(ebct_lb, ebct_ub, num_samples)
+    data = gac_inputs[gac_inputs.curve_id == cs_nums[0]].iloc[0]
+
+    # m = build_and_solve(data, sweep=None)
+    # m.fs.costing.LCOW.display()
+    # m.fs.gac.costing.costing_blocks["steel_pressure"].LCOW_pressure.display()
+    # m.fs.gac.costing.costing_blocks["concrete_gravity"].LCOW_gravity.display()
+
+    from analysis.run_ix_sens import get_regen_soln_info
+
+    solvent_vv = {"ethanol": 0.70}
+    solutes_molar = {"NaCl": 0.17}
+    density, mass_fractions = get_regen_soln_info(
+        solvent_vv=solvent_vv,
+        solutes_molar=solutes_molar,
     )
-    # data = gac_inputs.iloc[0]
-    data = gac_inputs[gac_inputs.curve_id == 0].iloc[0]
+    gac_config = {}
+    gac_config["regenerant"] = "single_use"
+    gac_config["regen_composition"] = mass_fractions
+    gac_config["regen_soln_density"] = density
+    # m = build_and_solve(data, sweep=None, gac_config=gac_config)
 
-    m = build_and_solve(data)
+    # m.fs.costing.LCOW.display()
+    # m.fs.costing.total_operating_cost.display()
+    # m.fs.gac.costing.gac_makeup_cost.display()
+    # m.fs.gac.costing.fixed_operating_cost.display()
+    # m.fs.costing.gac_pressure.regen_frac.display()
+    # m = build_and_solve(data, sweep=None, regenerant="single_use", regen_composition={}, regen_soln_density=None)
+    # m.fs.costing.LCOW.display()
+    # m.fs.costing.total_operating_cost.display()
+    # m.fs.gac.costing.gac_makeup_cost.display()
+    # m.fs.gac.costing.fixed_operating_cost.display()
+    # m.fs.costing.gac_pressure.regen_frac.display()
+    # m.fs.costing.total_operating_cost.display()
+    # m.fs.gac.costing.costing_blocks["steel_pressure"].LCOW_pressure.display()
+    # m.fs.gac.costing.costing_blocks["concrete_gravity"].LCOW_gravity.display()
+    # # for x in ebcts:
+    # #     m.fs.gac.ebct.fix(x)
+    # #     # m.fs.costing.initialize()
+    # #     print(f"dof =    {degrees_of_freedom(m)}")
+    # #     res = model_solve(m, tee=False)
+    # #     print(f"Adsorbent Unit Cost: {x}")
+    # #     print(f"LCOW: {value(m.fs.costing.LCOW)}")
+    # #     print("")
 
-    m.fs.costing.LCOW.display()
+    # # for sweep in ["ebct", "loading_rate", "regen_frac"]:
+
+    for sweep in ["regen_frac+makeup_unit_cost"]:
+        for cs in cs_nums:
+            data = gac_inputs[gac_inputs.curve_id == cs].iloc[0]
+            save_file = f"{path}/results/gac/gac_pfas_{sweep}_sensitivity-{data.source}_curve{data.curve_id}_{data.species}_{data.media}_{gac_config['regenerant']}.h5"
+            results_array, results_dict = parameter_sweep(
+                build_model=build_and_solve,
+                build_model_kwargs={
+                    "data": data,
+                    "sweep": None,
+                    "gac_config": gac_config,
+                },
+                build_sweep_params=build_sweep_params,
+                build_sweep_params_kwargs={"num_samples": num_samples, "sweep": sweep},
+                build_outputs=build_outputs,
+                build_outputs_kwargs={},
+                h5_results_file_name=save_file,
+                optimize_function=solve,
+                num_samples=num_samples,
+                csv_results_file_name=save_file.replace(".h5", ".csv"),
+                number_of_subprocesses=num_procs,
+            )
+
+            df = pd.read_csv(save_file.replace(".h5", ".csv"))
+            # Get results for base case
+            _m = build_and_solve(data)
+            o = build_outputs(_m)
+            d = {}
+
+            for k, v in o.items():
+                d[k] = value(v)
+            df = pd.concat([df, pd.DataFrame([d])], ignore_index=True)
+            if gac_config["regenerant"] == "custom":
+                # for k, v in mass_fractions.items():
+                #     df[f"regen_solute"] = k
+                #     df[f"regen_solute_{k}_mass_frac"] = v
+                #     df[f"regen_solute_{k}_conc_molar"] = solutes_molar[k]
+                # for k, v in solu
+                for k, v in solvent_vv.items():
+                    df[f"regen_solvent"] = k
+                    df[f"regen_solvent_{k}_vol_frac"] = v
+                    df[f"regen_solution_mass_frac_{k}"] = mass_fractions[k]
+                for k, v in solutes_molar.items():
+                    df[f"regen_solution"] = k
+                    df[f"regen_solute_{k}_conc_molar"] = v
+                    df[f"regen_solution_mass_frac_{k}"] = mass_fractions[k]
+
+            df["regenerant"] = gac_config["regenerant"]
+            df.to_csv(save_file.replace(".h5", ".csv"), index=False)
+            #     df
+            break

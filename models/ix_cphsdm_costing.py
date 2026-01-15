@@ -517,6 +517,7 @@ def cost_ion_exchange(blk):
     
     if blk.unit_model.config.regenerant == "custom":
         for chem, ww in blk.unit_model.config.regen_composition.items():
+            # assumes the whole bed is being regenerated every cycle
             blk.costing_package.cost_flow(blk.unit_model.regen_flow_mass * ww, chem)
     # else:
     #     raise ValueError("Regenerant type not recognized for costing.")
