@@ -40,12 +40,14 @@ from idaes.core.solvers import get_solver
 from idaes.core.util.constants import Constants
 from idaes.core.util.config import is_physical_parameter_block
 from idaes.core.util.tables import create_stream_table_dataframe
+from idaes.core.util.misc import StrEnum
 from idaes.core.util.exceptions import ConfigurationError, InitializationError
 import idaes.core.util.scaling as iscale
 import idaes.logger as idaeslog
 
 from watertap.core import ControlVolume0DBlock, InitializationMixin
-from watertap.costing.unit_models.gac import cost_gac
+# from watertap.costing.unit_models.gac import cost_gac
+from models.gac_cphsdm_costing import cost_gac
 
 __author__ = "Hunter Barber"
 
@@ -63,6 +65,11 @@ class FilmTransferCoefficientType(Enum):
 class SurfaceDiffusionCoefficientType(Enum):
     fixed = auto()  # surface diffusion coefficient is a user specified value
     calculated = auto()  # calculate surface diffusion coefficient
+
+class Regeneration(StrEnum):
+    single_use = "single_use"
+    custom = "custom"
+    onsite_thermal = "onsite_thermal"
 
 
 # ---------------------------------------------------------------------
@@ -235,6 +242,39 @@ class GACData(InitializationMixin, UnitModelBlockData):
         ),
     )
 
+    CONFIG.declare(
+        "regenerant",
+        ConfigValue(
+            default=Regeneration.single_use,
+            domain=In(Regeneration),
+            description="System for regeneration of GAC",
+        ),
+    )
+
+    CONFIG.declare(
+        "regen_composition",
+        ConfigValue(
+            default={},
+            domain=dict,
+            description="Mass fractions of regeneration solution, excluding water",
+        ),
+    )
+    CONFIG.declare(
+        "hazardous_waste",
+        ConfigValue(
+            default=False,
+            domain=bool,
+            description="Designates if resin and residuals contain hazardous material",
+        ),
+    )
+    CONFIG.declare(
+        "regen_soln_density", # because I am lazy
+        ConfigValue(
+            default=1000,
+            domain=float,
+            description="Density of the regeneration solution in kg/m^3",
+        ),
+    )
     def _validate_config(self):
         if (
             self.config.is_isothermal
@@ -689,6 +729,82 @@ class GACData(InitializationMixin, UnitModelBlockData):
             doc="gac usage/replacement/regeneration rate",
         )
 
+        # if self.config.regenerant != Regeneration.single_use:
+        prop_in = self.process_flow.properties_in[0]
+
+        self.regen_bed_volumes = Param(
+            initialize=10,
+            mutable=True,
+            units=pyunits.dimensionless,
+            doc="Number of bed volumes for regeneration step",
+        )
+
+        self.regen_soln_density = Param(
+            initialize=self.config.regen_soln_density,
+            mutable=True,
+            units=pyunits.kg / pyunits.m**3,
+            doc="Density of regeneration solution",
+        )
+
+        self.regen_tank_vol_factor = Param(
+            initialize=2,
+            mutable=True,
+            units=pyunits.dimensionless,
+            doc="Regeneration tank volume fudge factor",
+        )
+
+        self.regeneration_time = Param(
+            initialize=1800,
+            mutable=True,
+            units=pyunits.s,
+            doc="Regeneration time",
+        )
+
+        self.service_to_regen_flow_ratio = Param(
+            initialize=1,
+            mutable=True,
+            units=pyunits.dimensionless,
+            doc="Ratio of service flow rate to regeneration flow rate",
+        )
+
+
+        @self.Expression(doc="Regeneration solution volumetric flow rate per cycle")
+        def regen_flow_vol(b):
+            return pyunits.convert(
+                (b.regen_bed_volumes * b.bed_volume) / b.operational_time,
+                to_units=pyunits.m**3 / pyunits.s,
+            )
+
+        @self.Expression(doc="Regeneration solution mass flow rate per cycle")
+        def regen_flow_mass(b):
+            return pyunits.convert(
+                b.regen_flow_vol * b.regen_soln_density,
+                to_units=pyunits.kg / pyunits.s,
+            )
+
+        @self.Expression(
+            doc="Regeneration solution volumetric flow rate during regeneration step"
+        )
+        def regen_soln_flow_vol(b):
+            return pyunits.convert(
+                prop_in.flow_vol_phase["Liq"] / b.service_to_regen_flow_ratio,
+                to_units=pyunits.m**3 / pyunits.s,
+            )
+
+        @self.Expression(doc="Regeneration time based on flow rate and bed volumes")
+        def regen_time(b):
+            return pyunits.convert(
+                (b.regen_bed_volumes * b.bed_volume) / b.regen_soln_flow_vol,
+                to_units=pyunits.s,
+            )
+        
+        @self.Expression(doc="Regeneration tank volume required")
+        def regen_tank_vol(b):
+            return pyunits.convert(
+                b.regen_flow_vol * b.regen_time * b.regen_tank_vol_factor,
+                to_units=pyunits.m**3,
+            )
+            
         # ---------------------------------------------------------------------
         # property equations and other dimensionless variables
 
