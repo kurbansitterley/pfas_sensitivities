@@ -472,7 +472,8 @@ def build_sweep_params(m, num_samples=5, sweep="ebct", rel_frac=0.25):
     # Freundlich n Sensitivity
     # +./- X% base value
     freundlich_ninv_base = value(m.fs.ix.freundlich_ninv) ** -1
-    freundlich_ninv_lb = freundlich_ninv_base * (1 - rel_frac)
+    # freundlich_ninv_lb = freundlich_ninv_base * (1 - rel_frac)
+    freundlich_ninv_lb = 1.05
     freundlich_ninv_ub = freundlich_ninv_base * (1 + rel_frac)
 
     # Freundlich k sensitivity
@@ -535,175 +536,211 @@ def build_sweep_params(m, num_samples=5, sweep="ebct", rel_frac=0.25):
             num_samples,
         )
 
+    if sweep == "annual_resin_replacement_factor":
+        # only if doing regeneration otherwise doesn't impact cost
+        sweep_params["annual_resin_replacement_factor"] = LinearSample(
+            m.fs.costing.ion_exchange.annual_resin_replacement_factor,
+            0.05,
+            0.5,
+            num_samples,
+        )
+
+    if sweep == "annual_resin_replacement_factor+resin_cost":
+        # only if doing regeneration otherwise doesn't impact cost
+        sweep_params["annual_resin_replacement_factor"] = LinearSample(
+            m.fs.costing.ion_exchange.annual_resin_replacement_factor,
+            0.05,
+            0.5,
+            num_samples,
+        )
+        sweep_params["resin_cost"] = LinearSample(
+            m.fs.costing.ion_exchange.anion_exchange_resin_cost,
+            resin_cost_lb,
+            resin_cost_ub,
+            num_samples,
+        )
     return sweep_params
 
 
 def build_outputs(m):
     outputs = {}
 
-    cols = sorted([
-        "fs.costing.LCOW",
-        "fs.optimal_solve",
-        "fs.ix.freundlich_k",
-        "fs.ix.underdrain_h",
-        "fs.ix.distributor_h",
-        "fs.ix.Pe_p_A",
-        "fs.ix.Pe_p_exp",
-        "fs.ix.Sh_A",
-        "fs.ix.Sh_exp_A",
-        "fs.ix.Sh_exp_B",
-        "fs.ix.Sh_exp_C",
-        "fs.ix.p_drop_A",
-        "fs.ix.p_drop_B",
-        "fs.ix.p_drop_C",
-        "fs.ix.pump_efficiency",
-        "fs.ix.regen_bed_volumes",
-        "fs.ix.regen_soln_density",
-        "fs.ix.regen_tank_vol_factor",
-        "fs.ix.regeneration_time",
-        "fs.ix.service_to_regen_flow_ratio",
-        "fs.ix.bed_expansion_frac_A",
-        "fs.ix.bed_expansion_frac_B",
-        "fs.ix.bed_expansion_frac_C",
-        "fs.ix.rinse_bed_volumes",
-        "fs.ix.backwashing_rate",
-        "fs.ix.backwash_time",
-        "fs.ix.redundant_column_freq",
-        "fs.ix.resin_diam",
-        "fs.ix.resin_density",
-        "fs.ix.bed_volume",
-        "fs.ix.bed_volume_total",
-        "fs.ix.bed_depth",
-        "fs.ix.bed_porosity",
-        "fs.ix.column_height",
-        "fs.ix.bed_diameter",
-        "fs.ix.col_height_to_diam_ratio",
-        "fs.ix.number_columns",
-        "fs.ix.number_columns_redundant",
-        "fs.ix.breakthrough_time",
-        "fs.ix.bv",
-        "fs.ix.ebct",
-        "fs.ix.loading_rate",
-        "fs.ix.freundlich_ninv",
-        "fs.ix.surf_diff_coeff",
-        "fs.ix.film_mass_transfer_coeff",
-        "fs.ix.c_norm",
-        "fs.ix.c_eq",
-        "fs.ix.solute_dist_param",
-        "fs.ix.N_Bi",
-        "fs.ix.N_Bi_smooth",
-        "fs.ix.N_Sc",
-        "fs.ix.N_Re",
-        "fs.ix.resin_density_app",
-        "fs.ix.min_N_St",
-        "fs.ix.min_ebct",
-        "fs.ix.throughput",
-        "fs.ix.min_t_contact",
-        "fs.ix.min_breakthrough_time",
-        "fs.ix.shape_correction_factor",
-        "fs.ix.resin_porosity",
-        "fs.ix.tortuosity",
-        "fs.ix.t_contact",
-        "fs.ix.bed_area",
-        "fs.ix.vel_inter",
-        "fs.ix.flow_per_column",
-        "fs.ix.pressure_drop",
-        "fs.ix.rinse_time",
-        "fs.ix.waste_time",
-        "fs.ix.cycle_time",
-        "fs.ix.bw_flow",
-        "fs.ix.bed_expansion_frac",
-        "fs.ix.rinse_flow",
-        "fs.ix.bw_pump_power",
-        "fs.ix.rinse_pump_power",
-        "fs.ix.bed_expansion_h",
-        "fs.ix.free_board",
-        "fs.ix.main_pump_power",
-        "fs.ix.column_volume",
-        "fs.ix.column_volume_total",
-        "fs.ix.number_columns_total",
-        "fs.ix.Sh_lam",
-        "fs.ix.Sh_turb",
-        "fs.ix.Sh_p",
-        "fs.ix.Sh",
-        "fs.ix.Bi_p",
-        "fs.ix.spdfr",
-        "fs.ix.Bi_s",
-        "fs.ix.Bi",
-        "fs.ix.kf",
-        "fs.ix.bed_depth_to_diam_ratio",
-        "fs.ix.bed_mass",
-        "fs.ix.t_breakthru_year",
-        "fs.ix.t_breakthru_day",
-        "fs.ix.costing.capital_cost",
-        "fs.ix.costing.fixed_operating_cost",
-        "fs.ix.costing.regen_soln_dens",
-        "fs.ix.costing.regen_dose",
-        "fs.ix.costing.capital_cost_vessel",
-        "fs.ix.costing.capital_cost_resin",
-        "fs.ix.costing.capital_cost_regen_tank",
-        "fs.ix.costing.capital_cost_backwash_tank",
-        "fs.ix.costing.operating_cost_hazardous",
-        "fs.ix.costing.total_pumping_power",
-        "fs.ix.costing.flow_vol_resin",
-        "fs.ix.costing.single_use_resin_replacement_cost",
-        "fs.ix.costing.backwash_tank_vol",
-        "fs.ix.costing.cost_factor",
-        "fs.ix.costing.direct_capital_cost",
-        "fs.costing.total_investment_factor",
-        "fs.costing.maintenance_labor_chemical_factor",
-        "fs.costing.utilization_factor",
-        "fs.costing.electricity_cost",
-        "fs.costing.electrical_carbon_intensity",
-        "fs.costing.plant_lifetime",
-        "fs.costing.wacc",
-        "fs.costing.capital_recovery_factor",
-        "fs.costing.TPEC",
-        "fs.costing.TIC",
-        "fs.costing.HCl_cost",
-        "fs.costing.NaOH_cost",
-        "fs.costing.methanol_cost",
-        "fs.costing.ethanol_cost",
-        "fs.costing.acetone_cost",
-        "fs.costing.NaCl_cost",
-        "fs.costing.aggregate_capital_cost",
-        "fs.costing.aggregate_fixed_operating_cost",
-        "fs.costing.aggregate_variable_operating_cost",
-        "fs.costing.aggregate_flow_electricity",
-        "fs.costing.aggregate_flow_costs",
-        "fs.costing.aggregate_direct_capital_cost",
-        "fs.costing.total_capital_cost",
-        "fs.costing.total_operating_cost",
-        "fs.costing.maintenance_labor_chemical_operating_cost",
-        "fs.costing.total_fixed_operating_cost",
-        "fs.costing.total_variable_operating_cost",
-        "fs.costing.total_annualized_cost",
-        "fs.costing.LCOW_component_direct_capex",
-        "fs.costing.LCOW_component_indirect_capex",
-        "fs.costing.LCOW_component_fixed_opex",
-        "fs.costing.LCOW_component_variable_opex",
-        "fs.costing.LCOW_aggregate_direct_capex",
-        "fs.costing.LCOW_aggregate_indirect_capex",
-        "fs.costing.LCOW_aggregate_fixed_opex",
-        "fs.costing.LCOW_aggregate_variable_opex",
-        "fs.costing.specific_energy_consumption",
-        "fs.costing.specific_energy_consumption_component",
-        "fs.costing.resin_changeout_rate",
-        "fs.costing.resin_replacement_time_required",
-        "fs.costing.ion_exchange.anion_exchange_resin_cost",
-        "fs.costing.ion_exchange.cation_exchange_resin_cost",
-        "fs.costing.ion_exchange.vessel_A_coeff",
-        "fs.costing.ion_exchange.vessel_b_coeff",
-        "fs.costing.ion_exchange.backwash_tank_A_coeff",
-        "fs.costing.ion_exchange.backwash_tank_b_coeff",
-        "fs.costing.ion_exchange.regen_tank_A_coeff",
-        "fs.costing.ion_exchange.regen_tank_b_coeff",
-        "fs.costing.ion_exchange.annual_resin_replacement_factor",
-        "fs.costing.ion_exchange.hazardous_min_cost",
-        "fs.costing.ion_exchange.hazardous_resin_disposal",
-        "fs.costing.ion_exchange.hazardous_regen_disposal",
-        "fs.costing.ion_exchange.regen_recycle",
-    ])
+    cols = sorted(
+        [
+            "fs.costing.LCOW",
+            "fs.optimal_solve",
+            "fs.ix.freundlich_k",
+            "fs.ix.underdrain_h",
+            "fs.ix.distributor_h",
+            "fs.ix.Pe_p_A",
+            "fs.ix.Pe_p_exp",
+            "fs.ix.Sh_A",
+            "fs.ix.Sh_exp_A",
+            "fs.ix.Sh_exp_B",
+            "fs.ix.Sh_exp_C",
+            "fs.ix.p_drop_A",
+            "fs.ix.p_drop_B",
+            "fs.ix.p_drop_C",
+            "fs.ix.pump_efficiency",
+            "fs.ix.regen_bed_volumes",
+            "fs.ix.regen_soln_density",
+            "fs.ix.regen_tank_vol_factor",
+            "fs.ix.regeneration_time",
+            "fs.ix.service_to_regen_flow_ratio",
+            "fs.ix.bed_expansion_frac_A",
+            "fs.ix.bed_expansion_frac_B",
+            "fs.ix.bed_expansion_frac_C",
+            "fs.ix.rinse_bed_volumes",
+            "fs.ix.backwashing_rate",
+            "fs.ix.backwash_time",
+            "fs.ix.redundant_column_freq",
+            "fs.ix.resin_diam",
+            "fs.ix.resin_density",
+            "fs.ix.bed_volume",
+            "fs.ix.bed_volume_total",
+            "fs.ix.bed_depth",
+            "fs.ix.bed_porosity",
+            "fs.ix.column_height",
+            "fs.ix.bed_diameter",
+            "fs.ix.col_height_to_diam_ratio",
+            "fs.ix.number_columns",
+            "fs.ix.number_columns_redundant",
+            "fs.ix.breakthrough_time",
+            "fs.ix.bv",
+            "fs.ix.ebct",
+            "fs.ix.loading_rate",
+            "fs.ix.freundlich_ninv",
+            "fs.ix.surf_diff_coeff",
+            "fs.ix.film_mass_transfer_coeff",
+            "fs.ix.c_norm",
+            "fs.ix.c_eq",
+            "fs.ix.solute_dist_param",
+            "fs.ix.N_Bi",
+            "fs.ix.N_Bi_smooth",
+            "fs.ix.N_Sc",
+            "fs.ix.N_Re",
+            "fs.ix.resin_density_app",
+            "fs.ix.min_N_St",
+            "fs.ix.min_ebct",
+            "fs.ix.throughput",
+            "fs.ix.min_t_contact",
+            "fs.ix.min_breakthrough_time",
+            "fs.ix.shape_correction_factor",
+            "fs.ix.resin_porosity",
+            "fs.ix.tortuosity",
+            "fs.ix.t_contact",
+            "fs.ix.bed_area",
+            "fs.ix.vel_inter",
+            "fs.ix.flow_per_column",
+            "fs.ix.pressure_drop",
+            "fs.ix.rinse_time",
+            "fs.ix.waste_time",
+            "fs.ix.cycle_time",
+            "fs.ix.bw_flow",
+            "fs.ix.bed_expansion_frac",
+            "fs.ix.rinse_flow",
+            "fs.ix.bw_pump_power",
+            "fs.ix.rinse_pump_power",
+            "fs.ix.bed_expansion_h",
+            "fs.ix.free_board",
+            "fs.ix.main_pump_power",
+            "fs.ix.column_volume",
+            "fs.ix.column_volume_total",
+            "fs.ix.number_columns_total",
+            "fs.ix.Sh_lam",
+            "fs.ix.Sh_turb",
+            "fs.ix.Sh_p",
+            "fs.ix.Sh",
+            "fs.ix.Bi_p",
+            "fs.ix.spdfr",
+            "fs.ix.Bi_s",
+            "fs.ix.Bi",
+            "fs.ix.kf",
+            "fs.ix.bed_depth_to_diam_ratio",
+            "fs.ix.bed_mass",
+            "fs.ix.t_breakthru_year",
+            "fs.ix.t_breakthru_day",
+            "fs.ix.costing.capital_cost",
+            "fs.ix.costing.fixed_operating_cost",
+            "fs.ix.costing.regen_soln_dens",
+            "fs.ix.costing.regen_dose",
+            "fs.ix.costing.capital_cost_vessel",
+            "fs.ix.costing.capital_cost_resin",
+            "fs.ix.costing.capital_cost_regen_tank",
+            "fs.ix.costing.capital_cost_backwash_tank",
+            "fs.ix.costing.operating_cost_hazardous",
+            "fs.ix.costing.total_pumping_power",
+            "fs.ix.costing.flow_vol_resin",
+            "fs.ix.costing.single_use_resin_replacement_cost",
+            "fs.ix.costing.backwash_tank_vol",
+            "fs.ix.costing.cost_factor",
+            "fs.ix.costing.direct_capital_cost",
+            "fs.costing.total_investment_factor",
+            "fs.costing.maintenance_labor_chemical_factor",
+            "fs.costing.utilization_factor",
+            "fs.costing.electricity_cost",
+            "fs.costing.electrical_carbon_intensity",
+            "fs.costing.plant_lifetime",
+            "fs.costing.wacc",
+            "fs.costing.capital_recovery_factor",
+            "fs.costing.TPEC",
+            "fs.costing.TIC",
+            "fs.costing.HCl_cost",
+            "fs.costing.NaOH_cost",
+            "fs.costing.methanol_cost",
+            "fs.costing.ethanol_cost",
+            "fs.costing.acetone_cost",
+            "fs.costing.NaCl_cost",
+            "fs.costing.aggregate_capital_cost",
+            "fs.costing.aggregate_fixed_operating_cost",
+            "fs.costing.aggregate_variable_operating_cost",
+            "fs.costing.aggregate_flow_electricity",
+            "fs.costing.aggregate_flow_ethanol",
+            "fs.costing.aggregate_flow_methanol",
+            "fs.costing.aggregate_flow_acetone",
+            "fs.costing.aggregate_flow_NaCl",
+            "fs.costing.aggregate_flow_NaOH",
+            "fs.costing.aggregate_flow_costs",
+            "fs.costing.aggregate_direct_capital_cost",
+            "fs.costing.total_capital_cost",
+            "fs.costing.total_operating_cost",
+            "fs.costing.maintenance_labor_chemical_operating_cost",
+            "fs.costing.total_fixed_operating_cost",
+            "fs.costing.total_variable_operating_cost",
+            "fs.costing.total_annualized_cost",
+            "fs.costing.LCOW_component_direct_capex",
+            "fs.costing.LCOW_component_indirect_capex",
+            "fs.costing.LCOW_component_fixed_opex",
+            "fs.costing.LCOW_component_variable_opex",
+            "fs.costing.LCOW_aggregate_direct_capex",
+            "fs.costing.LCOW_aggregate_indirect_capex",
+            "fs.costing.LCOW_aggregate_fixed_opex",
+            "fs.costing.LCOW_aggregate_variable_opex",
+            "fs.costing.specific_energy_consumption",
+            "fs.costing.specific_energy_consumption_component",
+            "fs.costing.resin_changeout_rate",
+            "fs.costing.resin_replacement_time_required",
+            "fs.costing.ion_exchange.anion_exchange_resin_cost",
+            "fs.costing.ion_exchange.cation_exchange_resin_cost",
+            "fs.costing.ion_exchange.vessel_A_coeff",
+            "fs.costing.ion_exchange.vessel_b_coeff",
+            "fs.costing.ion_exchange.backwash_tank_A_coeff",
+            "fs.costing.ion_exchange.backwash_tank_b_coeff",
+            "fs.costing.ion_exchange.regen_tank_A_coeff",
+            "fs.costing.ion_exchange.regen_tank_b_coeff",
+            "fs.costing.ion_exchange.annual_resin_replacement_factor",
+            "fs.costing.ion_exchange.hazardous_min_cost",
+            "fs.costing.ion_exchange.hazardous_resin_disposal",
+            "fs.costing.ion_exchange.hazardous_regen_disposal",
+            "fs.costing.ion_exchange.regen_recycle",
+            "fs.costing.aggregate_flow_costs[electricity]",
+            "fs.costing.aggregate_flow_costs[ethanol]",
+            "fs.costing.aggregate_flow_costs[methanol]",
+            "fs.costing.aggregate_flow_costs[acetone]",
+            "fs.costing.aggregate_flow_costs[NaCl]",
+            "fs.costing.aggregate_flow_costs[NaOH]",
+        ]
+    )
 
     for c in cols:
         comp = m.find_component(c)
@@ -721,41 +758,54 @@ if __name__ == "__main__":
 
     df = pd.read_csv(f"{par_dir}/data/ix_case_study_sensitivity_inputs.csv")
     data = df.iloc[0]
+    ix_nums = [18, 13, 304]
+
+    for i, row in df.iterrows():
+        if row.curve_id not in ix_nums:
+            continue
+        data = row
+        print(f"\n\nRunning sample {data.curve_id} - {data.target_component}\n\n")
+        m = build_and_solve(data)
+        outputs = build_outputs(m)
+        print(f"Sample {data.curve_id} results:")
+        print(f"LCOW: {value(outputs['LCOW']):.4f} $/m3")
+        # for k, v in outputs.items():
+        #     print(f"{k}: {v.name} = {value(v)}")
 
     # m = build_and_solve(data)
     # outputs = build_outputs(m)
     # for k, v in outputs.items():
     #     print(f"{k}: {v.name}")
 
-    num_samples = 4
-    num_procs = 4
+    # num_samples = 4
+    # num_procs = 4
 
-    res_file = "ix_pfas_sensitivity-test.h5"
+    # res_file = "ix_pfas_sensitivity-test.h5"
 
     # num_samples = 100
     # file_save = "parameter_sweep_results.csv"
 
-    results_array, results_dict = parameter_sweep(
-        build_model=build_and_solve,
-        build_model_kwargs={"data": data, "sweep": "ebct"},
-        build_sweep_params=build_sweep_params,
-        build_sweep_params_kwargs={"num_samples": num_samples},
-        build_outputs=build_outputs,
-        build_outputs_kwargs={},
-        optimize_function=solve,
-        num_samples=num_samples,
-        csv_results_file_name=res_file.replace(".h5", ".csv"),
-    )
+    # results_array, results_dict = parameter_sweep(
+    #     build_model=build_and_solve,
+    #     build_model_kwargs={"data": data, "sweep": "ebct"},
+    #     build_sweep_params=build_sweep_params,
+    #     build_sweep_params_kwargs={"num_samples": num_samples},
+    #     build_outputs=build_outputs,
+    #     build_outputs_kwargs={},
+    #     optimize_function=solve,
+    #     num_samples=num_samples,
+    #     csv_results_file_name=res_file.replace(".h5", ".csv"),
+    # )
 
-    df = pd.read_csv(res_file.replace(".h5", ".csv"))
+    # df = pd.read_csv(res_file.replace(".h5", ".csv"))
 
-    import matplotlib.pyplot as plt
+    # import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots()
+    # fig, ax = plt.subplots()
 
-    ax.plot(df["ebct"], df["LCOW"], marker="o")
+    # ax.plot(df["ebct"], df["LCOW"], marker="o")
 
-    plt.show()
+    # plt.show()
     # # df = pd.read_csv(file_save)
     # # # make_stacked_plot(file_save, parameter="A_comp")
 
