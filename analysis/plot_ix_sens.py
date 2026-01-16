@@ -274,3 +274,4 @@ hands.append(Line2D([0], [0], color='k', lw=2, linestyle='-.', label='Acetone/Na
 ax.legend(handles=hands, loc="upper left", bbox_to_anchor=(1.01, 1))
 # fig2.supxlabel("Case Study - Species - Resin", y=-0.
 # print(len(legs), len(hands))
+plt.show()
